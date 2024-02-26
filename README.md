@@ -1,3 +1,3 @@
-# Palantir 
+# Telchar Smith Bot 
 
-Palantir is a bot that updates you in real-time when you forge a new block on the Cardano blockchain to your telegram channel. 
+Telchar is a bot that updates you in real-time when you forge a new block on the Cardano blockchain to your telegram channel. 
