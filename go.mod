@@ -1,4 +1,4 @@
-module snek-web
+module telchar
 
 go 1.20
 

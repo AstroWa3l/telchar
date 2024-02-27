@@ -1,0 +1,5 @@
+telegram:
+  token: "Your Telegram Bot/App Token"
+  channel: "Your Telegram Channel ID"
+nodeAddress: "Your Node Address:Port"
+poolId: "Your Pool ID"
