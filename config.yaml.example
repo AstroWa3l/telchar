@@ -1,5 +1,9 @@
 telegram:
   token: "Your Telegram Bot/App Token"
   channel: "Your Telegram Channel ID"
-nodeAddress: "Your Node Address:Port"
 poolId: "Your Pool ID"
+nodeAddress:
+  host1: "You Cardano Node IP and Port"
+  host2: "Your Relay Node IP and Port"
+  host3: "Your Relay Node IP and Port"
+image: "https://camo.githubusercontent.com/68a8a1b5952d31aa71e305b82159295eff2e81a0cb7bfb58017a3a0be40a88e8/68747470733a2f2f746f6c6b69656e676174657761792e6e65742f772f696d616765732f632f63382f446f6e61746f5f4769616e636f6c615f2d5f54656c636861725f666f7267696e675f4e617273696c2e6a7067"

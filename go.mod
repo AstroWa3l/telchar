@@ -1,9 +1,14 @@
 module telchar
 
-go 1.20
+go 1.21
+
+toolchain go1.22.1
 
 require (
 	github.com/blinklabs-io/snek v0.15.0
+	github.com/btcsuite/btcutil v1.0.2
+	github.com/cardano-community/koios-go-client/v3 v3.1.3
+	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/gorilla/websocket v1.5.1
 	github.com/spf13/viper v1.18.2
 	gopkg.in/tucnak/telebot.v2 v2.5.0
@@ -24,6 +29,7 @@ require (
 	github.com/rogpeppe/go-internal v1.12.0 // indirect
 	github.com/sagikazarmark/locafero v0.4.0 // indirect
 	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
+	github.com/shopspring/decimal v1.3.1 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.6.0 // indirect
@@ -38,6 +44,7 @@ require (
 	golang.org/x/net v0.20.0 // indirect
 	golang.org/x/sys v0.16.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/time v0.5.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +15,9 @@ import (
 	"github.com/blinklabs-io/snek/input/chainsync"
 	output_embedded "github.com/blinklabs-io/snek/output/embedded"
 	"github.com/blinklabs-io/snek/pipeline"
+	"github.com/btcsuite/btcutil/bech32"
+	koios "github.com/cardano-community/koios-go-client/v3"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/gorilla/websocket"
 	"github.com/spf13/viper"
 	telebot "gopkg.in/tucnak/telebot.v2"
@@ -26,9 +32,6 @@ var upgrader = websocket.Upgrader{
 		return true
 	},
 }
-
-// Telegram bot
-var bot *telebot.Bot
 
 type BlockEvent struct {
 	Type      string                 `json:"type"`
@@ -89,10 +92,14 @@ type Indexer struct {
 	bot              *telebot.Bot
 	transactionEvent TransactionEvent
 	rollbackEvent    RollbackEvent
-	nodeAddress      string
 	poolId           string
 	telegramChannel  string
 	telegramToken    string
+	image            string
+	ticker           string
+	koios            *koios.Client
+	bech32PoolId     string
+	nodeAddresses    []string
 }
 
 // Singleton instance of the Indexer
@@ -110,10 +117,17 @@ func (i *Indexer) Start() error {
 
 	}
 
-	i.nodeAddress = viper.GetString("nodeAddress")
+	// Set the configuration values
 	i.poolId = viper.GetString("poolId")
 	i.telegramChannel = viper.GetString("telegram.channel")
 	i.telegramToken = viper.GetString("telegram.token")
+	i.image = viper.GetString("image")
+
+	// Store the node addresses hosts into the array nodeAddresses in the Indexer
+	i.nodeAddresses = viper.GetStringSlice("nodeAddress.host1")
+	i.nodeAddresses = append(i.nodeAddresses, viper.GetStringSlice("nodeAddress.host2")...)
+	// i.nodeAddresses = append(i.nodeAddresses, viper.GetStringSlice("nodeAddress.host3")...)
+	// fmt.Println("Node Addresses: ", i.nodeAddresses[0], i.nodeAddresses[1], i.nodeAddresses[2])
 
 	// Initialize the bot
 	var err error
@@ -126,49 +140,137 @@ func (i *Indexer) Start() error {
 		log.Fatalf("failed to start bot: %s", err)
 	}
 
-	node := chainsync.WithAddress(i.nodeAddress)
-	inputOpts := []chainsync.ChainSyncOptionFunc{
-		node,
-		chainsync.WithNetworkMagic(764824073),
-		chainsync.WithIntersectTip(true),
-		chainsync.WithAutoReconnect(true),
-	}
-	// Create a new pipeline
-	i.pipeline = pipeline.New()
-
-	// Configure ChainSync input
-	input_chainsync := chainsync.New(inputOpts...)
-	i.pipeline.AddInput(input_chainsync)
-
-	// Configure filter to handle events
-	filterEvent := filter_event.New(filter_event.WithTypes([]string{"chainsync.block", "chainsync.rollback"}))
-	i.pipeline.AddFilter(filterEvent)
-
-	// Configure embedded output with callback function
-	output := output_embedded.New(output_embedded.WithCallbackFunc(i.handleEvent))
-	i.pipeline.AddOutput(output)
-
-	// Start the pipeline
-	log.Println("Starting the pipeline...")
-	if err := i.pipeline.Start(); err != nil {
-		log.Fatalf("failed to start pipeline: %s\n", err)
+	/// Initialize the kois client
+	i.koios, e = koios.New()
+	if e != nil {
+		log.Fatal(e)
 	}
 
-	// Start error handler in a goroutine
-	go func() {
-		for {
-			err, ok := <-i.pipeline.ErrorChan()
-			if ok {
-				log.Printf("pipeline failed: %s\n", err)
-				log.Println("Restarting pipeline...")
-				if err := i.pipeline.Start(); err != nil {
-					log.Fatalf("failed to restart pipeline: %s\n", err)
-				}
-			}
+	// Convert the poolId to Bech32
+	bech32PoolId, err := convertToBech32(i.poolId)
+	if err != nil {
+		log.Printf("failed to convert pool id to Bech32: %s", err)
+		fmt.Println("PoolId: ", bech32PoolId)
+		i.bech32PoolId = bech32PoolId
+	}
+	// } else {
+	// 	poolInfo, err := i.koios.GetPoolInfo(context.Background(), i.bech32PoolId, nil)
+	// 	if err != nil {
+	// 		log.Printf("failed to get pool info: %s", err)
+	// 		fmt.Println("PoolId: ", bech32PoolId)
+	// 	}
+	// }
+	// Use the first node address to connect to the Cardano node
+	// node := chainsync.WithAddress(i.nodeAddresses[0])
+	// inputOpts := []chainsync.ChainSyncOptionFunc{
+	// 	node,
+	// 	chainsync.WithNetworkMagic(764824073),
+	// 	chainsync.WithIntersectTip(true),
+	// 	chainsync.WithAutoReconnect(true),
+	// }
+	// // Create a new pipeline
+	// i.pipeline = pipeline.New()
+
+	// // Configure ChainSync input
+	// input_chainsync := chainsync.New(inputOpts...)
+	// i.pipeline.AddInput(input_chainsync)
+
+	// // Configure filter to handle events
+	// filterEvent := filter_event.New(filter_event.WithTypes([]string{"chainsync.block", "chainsync.rollback"}))
+	// i.pipeline.AddFilter(filterEvent)
+
+	// // Configure embedded output with callback function
+	// output := output_embedded.New(output_embedded.WithCallbackFunc(i.handleEvent))
+	// i.pipeline.AddOutput(output)
+
+	const maxRetries = 3
+
+	// Wrap the pipeline start in a function for the backoff operation
+	startPipelineFunc := func(host string) error {
+		// Use the host to connect to the Cardano node
+		node := chainsync.WithAddress(host)
+		inputOpts := []chainsync.ChainSyncOptionFunc{
+			node,
+			chainsync.WithNetworkMagic(764824073),
+			chainsync.WithIntersectTip(true),
+			chainsync.WithAutoReconnect(true),
 		}
-	}()
 
-	return nil
+		i.pipeline = pipeline.New()
+
+		// Configure ChainSync input
+		input_chainsync := chainsync.New(inputOpts...)
+		i.pipeline.AddInput(input_chainsync)
+
+		// Configure filter to handle events
+		filterEvent := filter_event.New(filter_event.WithTypes([]string{"chainsync.block", "chainsync.rollback"}))
+		i.pipeline.AddFilter(filterEvent)
+
+		// Configure embedded output with callback function
+		output := output_embedded.New(output_embedded.WithCallbackFunc(i.handleEvent))
+		i.pipeline.AddOutput(output)
+
+		err := i.pipeline.Start()
+		if err != nil {
+			log.Printf("Failed to start pipeline: %s. Retrying...", err)
+			return err
+		}
+		return nil
+	}
+
+	// Initialize the backoff strategy
+	bo := backoff.NewExponentialBackOff()
+	bo.MaxElapsedTime = time.Minute // Max duration to keep retrying
+
+	hosts := i.nodeAddresses
+	for _, host := range hosts {
+		for i := 0; i < maxRetries; i++ {
+			err := startPipelineFunc(host)
+			if err == nil {
+				return nil
+			}
+			time.Sleep(time.Duration(i) * time.Second)
+		}
+	}
+
+	log.Fatalf("Failed to start pipeline after several attempts")
+	return errors.New("Failed to start pipeline after several attempts")
+
+	// // Initialize the backoff strategy
+	// bo := backoff.NewExponentialBackOff()
+	// bo.MaxElapsedTime = time.Minute // Max duration to keep retrying
+
+	// // Wrap the pipeline start in a function for the backoff operation
+	// startPipelineFunc := func() error {
+	// 	err := i.pipeline.Start()
+	// 	if err != nil {
+	// 		log.Printf("Failed to start pipeline: %s. Retrying...", err)
+	// 		return err
+	// 	}
+	// 	return nil
+	// }
+
+	// // Use the backoff strategy in the pipeline start
+	// if err := backoff.Retry(startPipelineFunc, bo); err != nil {
+	// 	log.Fatalf("Failed to start pipeline after several attempts: %s", err)
+	// 	return err
+	// }
+
+	// // Start error handler in a goroutine
+	// go func() {
+	// 	for {
+	// 		err, ok := <-i.pipeline.ErrorChan()
+	// 		if ok {
+	// 			log.Printf("pipeline failed: %s\n", err)
+	// 			log.Println("Restarting pipeline...")
+	// 			if err := i.pipeline.Start(); err != nil {
+	// 				log.Fatalf("failed to restart pipeline: %s\n", err)
+	// 			}
+	// 		}
+	// 	}
+	// }()
+
+	// return nil
 }
 
 // Handle block events received from the Snek pipeline
@@ -198,7 +300,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		return fmt.Errorf("failed to get event type")
 	}
 
-	channel, err := i.bot.ChatByID(i.telegramChannel) // replace 'yourchannel' with your channel's username
+	channel, err := i.bot.ChatByID(i.telegramChannel)
 	if err != nil {
 		panic(err) // You should add better error handling than this!
 	}
@@ -211,6 +313,13 @@ func (i *Indexer) handleEvent(event event.Event) error {
 			return err
 		}
 
+		bech32IssuerVkey, err := convertToBech32(blockEvent.Payload.IssuerVkey)
+		if err != nil {
+			log.Printf("failed to convert issuer vkey to Bech32: %s", err)
+		} else {
+			fmt.Printf("IssuerVkey: %s\n", bech32IssuerVkey)
+		}
+
 		parsedTime, err := time.Parse(time.RFC3339, blockEvent.Timestamp)
 		if err == nil {
 			blockEvent.Timestamp = parsedTime.Format("January 2, 2006 15:04:05 MST")
@@ -218,13 +327,27 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		}
 
 		if blockEvent.Payload.IssuerVkey == i.poolId {
-			msg := fmt.Sprintf("OTG New block received: %d\nHash: %s\nIssuer: %s\nTime: %s", blockEvent.Context.BlockNumber,
-				blockEvent.Payload.BlockHash, blockEvent.Payload.IssuerVkey, blockEvent.Timestamp)
-			_, err = i.bot.Send(channel, msg)
+			msg := fmt.Sprintf("New Block Forged 🧱: https://pooltool.io/realtime/%d\n\nHash#️⃣: https://cexplorer.io/block/%s\n\nTx Count🔢: %d\n\n🕰: %s",
+				blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash, blockEvent.Payload.TransactionCount, blockEvent.Timestamp)
+			photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
+			_, err = i.bot.Send(channel, photo)
+			if err != nil {
+				log.Printf("failed to send Telegram message: %s", err)
+			}
+			// }
+		} else {
+			msg := fmt.Sprintf("New %s Block Forged 🧱: https://pooltool.io/realtime/%d\n\nHash#️⃣: https://cexplorer.io/block/%s\n\nTx Count🔢: %d\n\n🕰: %s",
+				i.ticker, blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash,
+				blockEvent.Payload.TransactionCount, blockEvent.Timestamp)
+			// Get random duck image and send it to the Telegram channel with the message msg as caption
+			photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
+			_, err = i.bot.Send(channel, photo)
 			if err != nil {
 				log.Printf("failed to send Telegram message: %s", err)
 			}
 		}
+
+		////////////////////////////////////////OLD CODE////////////////////////////////////////
 		// } else {
 		// 	msg := fmt.Sprintf("New block received: %d\nHash: %s\nIssuer: %s\nTime: %s", blockEvent.Context.BlockNumber,
 		// 		blockEvent.Payload.BlockHash, blockEvent.Payload.IssuerVkey, blockEvent.Timestamp)
@@ -233,6 +356,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		// 		log.Printf("failed to send Telegram message: %s", err)
 		// 	}
 		// }
+		////////////////////////////////////////OLD CODE////////////////////////////////////////
 
 		// Update the currentEvent field in the Indexer
 		i.blockEvent = blockEvent
@@ -343,8 +467,42 @@ func handleMessages() {
 	}
 }
 
+func convertToBech32(hash string) (string, error) {
+	bytes, err := hex.DecodeString(hash)
+	if err != nil {
+		return "", err
+	}
+
+	fiveBitWords, err := bech32.ConvertBits(bytes, 8, 5, true)
+	if err != nil {
+		return "", err
+	}
+
+	bech32Str, err := bech32.Encode("pool", fiveBitWords)
+	if err != nil {
+		return "", err
+	}
+
+	return bech32Str, nil
+}
+
 // Main function to start the Snek pipeline
 func main() {
+
+	// testing koios
+	api, e := koios.New()
+	if e != nil {
+		log.Fatal(e)
+	}
+
+	res, er := api.GetTip(context.Background(), nil)
+	if er != nil {
+		log.Fatal(er)
+	}
+	fmt.Println("status: ", res.Status)
+	fmt.Println("statu_code: ", res.StatusCode)
+
+	fmt.Println("Epoch: ", res.Data.EpochNo)
 
 	// Start the Snek pipeline
 	if err := globalIndexer.Start(); err != nil {
@@ -362,8 +520,8 @@ func main() {
 	go handleMessages()
 
 	// Start the server on localhost port 8080 and log any errors
-	log.Println("http server started on :8080")
-	err := http.ListenAndServe("localhost:8080", nil)
+	log.Println("http server started on :8008")
+	err := http.ListenAndServe("localhost:8008", nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
