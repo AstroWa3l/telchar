@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -100,6 +101,7 @@ type Indexer struct {
 	koios            *koios.Client
 	bech32PoolId     string
 	nodeAddresses    []string
+	totalBlocks      uint64
 }
 
 // Singleton instance of the Indexer
@@ -126,8 +128,6 @@ func (i *Indexer) Start() error {
 	// Store the node addresses hosts into the array nodeAddresses in the Indexer
 	i.nodeAddresses = viper.GetStringSlice("nodeAddress.host1")
 	i.nodeAddresses = append(i.nodeAddresses, viper.GetStringSlice("nodeAddress.host2")...)
-	// i.nodeAddresses = append(i.nodeAddresses, viper.GetStringSlice("nodeAddress.host3")...)
-	// fmt.Println("Node Addresses: ", i.nodeAddresses[0], i.nodeAddresses[1], i.nodeAddresses[2])
 
 	// Initialize the bot
 	var err error
@@ -151,37 +151,18 @@ func (i *Indexer) Start() error {
 	if err != nil {
 		log.Printf("failed to convert pool id to Bech32: %s", err)
 		fmt.Println("PoolId: ", bech32PoolId)
-		i.bech32PoolId = bech32PoolId
 	}
-	// } else {
-	// 	poolInfo, err := i.koios.GetPoolInfo(context.Background(), i.bech32PoolId, nil)
-	// 	if err != nil {
-	// 		log.Printf("failed to get pool info: %s", err)
-	// 		fmt.Println("PoolId: ", bech32PoolId)
-	// 	}
-	// }
-	// Use the first node address to connect to the Cardano node
-	// node := chainsync.WithAddress(i.nodeAddresses[0])
-	// inputOpts := []chainsync.ChainSyncOptionFunc{
-	// 	node,
-	// 	chainsync.WithNetworkMagic(764824073),
-	// 	chainsync.WithIntersectTip(true),
-	// 	chainsync.WithAutoReconnect(true),
-	// }
-	// // Create a new pipeline
-	// i.pipeline = pipeline.New()
 
-	// // Configure ChainSync input
-	// input_chainsync := chainsync.New(inputOpts...)
-	// i.pipeline.AddInput(input_chainsync)
+	i.bech32PoolId = bech32PoolId
 
-	// // Configure filter to handle events
-	// filterEvent := filter_event.New(filter_event.WithTypes([]string{"chainsync.block", "chainsync.rollback"}))
-	// i.pipeline.AddFilter(filterEvent)
+	// Get pool lifetime blocks
+	poolInfo, err := i.koios.GetPoolInfo(context.Background(), koios.PoolID(i.bech32PoolId), nil)
+	if err != nil {
+		log.Fatalf("failed to get pool lifetime blocks: %s", err)
+	}
 
-	// // Configure embedded output with callback function
-	// output := output_embedded.New(output_embedded.WithCallbackFunc(i.handleEvent))
-	// i.pipeline.AddOutput(output)
+	i.totalBlocks = poolInfo.Data.BlockCount
+	fmt.Println("Total Blocks: ", i.totalBlocks)
 
 	const maxRetries = 3
 
@@ -236,6 +217,7 @@ func (i *Indexer) Start() error {
 	log.Fatalf("Failed to start pipeline after several attempts")
 	return errors.New("Failed to start pipeline after several attempts")
 
+	////////////////////////////////////////OLD CODE////////////////////////////////////////
 	// // Initialize the backoff strategy
 	// bo := backoff.NewExponentialBackOff()
 	// bo.MaxElapsedTime = time.Minute // Max duration to keep retrying
@@ -271,6 +253,7 @@ func (i *Indexer) Start() error {
 	// }()
 
 	// return nil
+	////////////////////////////////////////OLD CODE////////////////////////////////////////
 }
 
 // Handle block events received from the Snek pipeline
@@ -285,14 +268,14 @@ func (i *Indexer) handleEvent(event event.Event) error {
 	// Marshal the event to JSON
 	data, err := json.Marshal(event)
 	if err != nil {
-		return err
+		return fmt.Errorf("error unmarshalling event: %v", err)
 	}
 
 	// Unmarshal the event to get the event type
 	var getEvent map[string]interface{}
 	errr := json.Unmarshal(data, &getEvent)
 	if errr != nil {
-		return err
+		return fmt.Errorf("error unmarshalling event: %v", err)
 	}
 
 	eventType, ok := getEvent["type"].(string)
@@ -310,7 +293,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		var blockEvent BlockEvent
 		err := json.Unmarshal(data, &blockEvent)
 		if err != nil {
-			return err
+			return fmt.Errorf("error unmarshalling block event: %v", err)
 		}
 
 		bech32IssuerVkey, err := convertToBech32(blockEvent.Payload.IssuerVkey)
@@ -327,36 +310,25 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		}
 
 		if blockEvent.Payload.IssuerVkey == i.poolId {
-			msg := fmt.Sprintf("New Block Forged 🧱: https://pooltool.io/realtime/%d\n\nHash#️⃣: https://cexplorer.io/block/%s\n\nTx Count🔢: %d\n\n🕰: %s",
-				blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash, blockEvent.Payload.TransactionCount, blockEvent.Timestamp)
-			photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
-			_, err = i.bot.Send(channel, photo)
-			if err != nil {
-				log.Printf("failed to send Telegram message: %s", err)
-			}
-			// }
-		} else {
-			msg := fmt.Sprintf("New %s Block Forged 🧱: https://pooltool.io/realtime/%d\n\nHash#️⃣: https://cexplorer.io/block/%s\n\nTx Count🔢: %d\n\n🕰: %s",
-				i.ticker, blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash,
-				blockEvent.Payload.TransactionCount, blockEvent.Timestamp)
-			// Get random duck image and send it to the Telegram channel with the message msg as caption
+			msg := fmt.Sprintf("New Block Forged 🧱: https://pooltool.io/realtime/%d\n\nHash#️⃣: https://cexplorer.io/block/%s\n\nTx Count🔢: %d\n\n🕰: %s\n\nTotal 🧱's Forged: %d",
+				blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash, blockEvent.Payload.TransactionCount, blockEvent.Timestamp, i.totalBlocks)
 			photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
 			_, err = i.bot.Send(channel, photo)
 			if err != nil {
 				log.Printf("failed to send Telegram message: %s", err)
 			}
 		}
-
-		////////////////////////////////////////OLD CODE////////////////////////////////////////
 		// } else {
-		// 	msg := fmt.Sprintf("New block received: %d\nHash: %s\nIssuer: %s\nTime: %s", blockEvent.Context.BlockNumber,
-		// 		blockEvent.Payload.BlockHash, blockEvent.Payload.IssuerVkey, blockEvent.Timestamp)
-		// 	_, err = i.bot.Send(channel, msg)
+		// 	msg := fmt.Sprintf("New %s Block Forged 🧱: https://pooltool.io/realtime/%d\n\nHash#️⃣: https://cexplorer.io/block/%s\n\nTx Count🔢: %d\n\n🕰: %s",
+		// 		i.ticker, blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash,
+		// 		blockEvent.Payload.TransactionCount, blockEvent.Timestamp)
+		// 	// Get random duck image and send it to the Telegram channel with the message msg as caption
+		// 	photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
+		// 	_, err = i.bot.Send(channel, photo)
 		// 	if err != nil {
 		// 		log.Printf("failed to send Telegram message: %s", err)
 		// 	}
 		// }
-		////////////////////////////////////////OLD CODE////////////////////////////////////////
 
 		// Update the currentEvent field in the Indexer
 		i.blockEvent = blockEvent
@@ -370,7 +342,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		var rollbackEvent RollbackEvent
 		err := json.Unmarshal(data, &rollbackEvent)
 		if err != nil {
-			return err
+			return fmt.Errorf("error unmarshalling rollback event: %v", err)
 		}
 
 		parsedTime, err := time.Parse(time.RFC3339, rollbackEvent.Timestamp)
@@ -407,21 +379,31 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		broadcast <- transactionEvent
 	}
 
-	// Start error handler in a goroutine
 	go func() {
 		for {
 			err, ok := <-i.pipeline.ErrorChan()
 			if ok {
-				log.Printf("pipeline failed: %s\n", err)
-				log.Println("Restarting pipeline...")
-				if err := i.pipeline.Start(); err != nil {
-					log.Fatalf("failed to restart pipeline: %s\n", err)
+				if errors.Is(err, io.EOF) {
+					log.Println("Input source is exhausted, stopping pipeline...")
+					i.pipeline.Stop()
+					time.Sleep(time.Second * 10) // wait for 10 seconds
+					log.Println("Restarting pipeline...")
+					if err := i.pipeline.Start(); err != nil {
+						log.Fatalf("failed to restart pipeline: %s\n", err)
+					}
+				} else {
+					log.Printf("pipeline failed: %s\n", err)
+					log.Println("Restarting pipeline...")
+					if err := i.pipeline.Start(); err != nil {
+						log.Fatalf("failed to restart pipeline: %s\n", err)
+					}
 				}
 			}
 		}
 	}()
 
 	return nil
+
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
