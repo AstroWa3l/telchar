@@ -217,43 +217,6 @@ func (i *Indexer) Start() error {
 	log.Fatalf("Failed to start pipeline after several attempts")
 	return errors.New("Failed to start pipeline after several attempts")
 
-	////////////////////////////////////////OLD CODE////////////////////////////////////////
-	// // Initialize the backoff strategy
-	// bo := backoff.NewExponentialBackOff()
-	// bo.MaxElapsedTime = time.Minute // Max duration to keep retrying
-
-	// // Wrap the pipeline start in a function for the backoff operation
-	// startPipelineFunc := func() error {
-	// 	err := i.pipeline.Start()
-	// 	if err != nil {
-	// 		log.Printf("Failed to start pipeline: %s. Retrying...", err)
-	// 		return err
-	// 	}
-	// 	return nil
-	// }
-
-	// // Use the backoff strategy in the pipeline start
-	// if err := backoff.Retry(startPipelineFunc, bo); err != nil {
-	// 	log.Fatalf("Failed to start pipeline after several attempts: %s", err)
-	// 	return err
-	// }
-
-	// // Start error handler in a goroutine
-	// go func() {
-	// 	for {
-	// 		err, ok := <-i.pipeline.ErrorChan()
-	// 		if ok {
-	// 			log.Printf("pipeline failed: %s\n", err)
-	// 			log.Println("Restarting pipeline...")
-	// 			if err := i.pipeline.Start(); err != nil {
-	// 				log.Fatalf("failed to restart pipeline: %s\n", err)
-	// 			}
-	// 		}
-	// 	}
-	// }()
-
-	// return nil
-	////////////////////////////////////////OLD CODE////////////////////////////////////////
 }
 
 // Handle block events received from the Snek pipeline
