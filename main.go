@@ -102,6 +102,7 @@ type Indexer struct {
 	bech32PoolId     string
 	nodeAddresses    []string
 	totalBlocks      uint64
+	poolName         string
 }
 
 // Singleton instance of the Indexer
@@ -146,6 +147,14 @@ func (i *Indexer) Start() error {
 		log.Fatal(e)
 	}
 
+	// Get the current epoch
+	epochInfo, err := i.koios.GetTip(context.Background(), nil)
+	if err != nil {
+		log.Fatalf("failed to get epoch info: %s", err)
+	}
+
+	fmt.Println("Epoch: ", epochInfo.Data.EpochNo)
+
 	// Convert the poolId to Bech32
 	bech32PoolId, err := convertToBech32(i.poolId)
 	if err != nil {
@@ -153,16 +162,35 @@ func (i *Indexer) Start() error {
 		fmt.Println("PoolId: ", bech32PoolId)
 	}
 
+	// Set the bech32PoolId field in the Indexer
 	i.bech32PoolId = bech32PoolId
 
-	// Get pool lifetime blocks
+	// Get pool info
 	poolInfo, err := i.koios.GetPoolInfo(context.Background(), koios.PoolID(i.bech32PoolId), nil)
 	if err != nil {
 		log.Fatalf("failed to get pool lifetime blocks: %s", err)
 	}
 
-	i.totalBlocks = poolInfo.Data.BlockCount
-	fmt.Println("Total Blocks: ", i.totalBlocks)
+	if poolInfo.Data != nil {
+		i.totalBlocks = poolInfo.Data.BlockCount
+		fmt.Println("Total Blocks: ", i.totalBlocks)
+	} else {
+		log.Fatalf("failed to get pool lifetime blocks: %s", err)
+	}
+
+	// Get pool ticker
+	if poolInfo.Data.MetaJSON.Ticker != nil {
+		i.ticker = *poolInfo.Data.MetaJSON.Ticker
+	} else {
+		i.ticker = ""
+	}
+
+	// Get pool name
+	if poolInfo.Data.MetaJSON.Name != nil {
+		i.poolName = *poolInfo.Data.MetaJSON.Name
+	} else {
+		i.poolName = ""
+	}
 
 	const maxRetries = 3
 
@@ -234,11 +262,15 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		return fmt.Errorf("error unmarshalling event: %v", err)
 	}
 
+	if len(data) == 0 {
+		return fmt.Errorf("no data to unmarshal")
+	}
+
 	// Unmarshal the event to get the event type
 	var getEvent map[string]interface{}
 	errr := json.Unmarshal(data, &getEvent)
 	if errr != nil {
-		return fmt.Errorf("error unmarshalling event: %v", err)
+		return err
 	}
 
 	eventType, ok := getEvent["type"].(string)
@@ -253,6 +285,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 
 	switch eventType {
 	case "chainsync.block":
+
 		var blockEvent BlockEvent
 		err := json.Unmarshal(data, &blockEvent)
 		if err != nil {
@@ -268,24 +301,70 @@ func (i *Indexer) handleEvent(event event.Event) error {
 
 		parsedTime, err := time.Parse(time.RFC3339, blockEvent.Timestamp)
 		if err == nil {
-			blockEvent.Timestamp = parsedTime.Format("January 2, 2006 15:04:05 MST")
-			fmt.Printf("Time: %s\n", blockEvent.Timestamp)
+			localTime := parsedTime.In(time.Local)
+			blockEvent.Timestamp = localTime.Format("January 2, 2006 15:04:05 MST")
+			fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
 		}
 
 		if blockEvent.Payload.IssuerVkey == i.poolId {
-			msg := fmt.Sprintf("New Block Forged 🧱: https://pooltool.io/realtime/%d\n\nHash#️⃣: https://cexplorer.io/block/%s\n\nTx Count🔢: %d\n\n🕰: %s\n\nTotal 🧱's Forged: %d",
-				blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash, blockEvent.Payload.TransactionCount, blockEvent.Timestamp, i.totalBlocks)
+
+			tipInfo, err := i.koios.GetTip(context.Background(), nil)
+			if err != nil {
+				log.Fatalf("failed to get epoch info: %s", err)
+			}
+
+			// Current epoch
+			epoch := tipInfo.Data.EpochNo
+
+			// Getting the current epoch's blocks made by a specific pool
+			currentEpochBlocks, err := i.koios.GetPoolBlocks(context.Background(), koios.PoolID(i.poolId), &epoch, nil)
+			if err != nil {
+				log.Fatal(err)
+			}
+			// We need to count the length of the json array in order to get the number of blocks
+			currBlocks := len(currentEpochBlocks.Data)
+
+			msg := fmt.Sprintf("%s\n\n"+
+				"New Block Forged 🧱: https://pooltool.io/realtime/%d\n\n"+
+				"Hash#️⃣: https://cexplorer.io/block/%s\n\n"+
+				"Tx Count🔢: %d\n\n"+
+				"🕰: %s\n\n"+
+				"Epoch"+" (%d) "+"🧱s Forged: %d\n\n"+
+				"Lifetime 🧱s Forged: %d",
+				i.poolName, blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash,
+				blockEvent.Payload.TransactionCount, blockEvent.Timestamp, epoch, currBlocks, i.totalBlocks)
 			photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
 			_, err = i.bot.Send(channel, photo)
 			if err != nil {
 				log.Printf("failed to send Telegram message: %s", err)
 			}
 		}
+		/// Uncomment the following code to send messages for all pools for testing purposes
 		// } else {
-		// 	msg := fmt.Sprintf("New %s Block Forged 🧱: https://pooltool.io/realtime/%d\n\nHash#️⃣: https://cexplorer.io/block/%s\n\nTx Count🔢: %d\n\n🕰: %s",
-		// 		i.ticker, blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash,
-		// 		blockEvent.Payload.TransactionCount, blockEvent.Timestamp)
-		// 	// Get random duck image and send it to the Telegram channel with the message msg as caption
+		// 	tipInfo, err := i.koios.GetTip(context.Background(), nil)
+		// 	if err != nil {
+		// 		log.Fatalf("failed to get epoch info: %s", err)
+		// 	}
+
+		// 	// Current epoch
+		// 	epoch := tipInfo.Data.EpochNo
+
+		// 	// Getting the current epoch's blocks made by a specific pool
+		// 	currentEpochBlocks, err := i.koios.GetPoolBlocks(context.Background(), koios.PoolID(bech32IssuerVkey), &epoch, nil)
+		// 	if err != nil {
+		// 		log.Fatal(err)
+		// 	}
+		// 	// We need to count the length of the json array in order to get the number of blocks
+		// 	currBlocks := len(currentEpochBlocks.Data)
+
+		// 	msg := fmt.Sprintf("%s\n\n"+
+		// 		"New Block Forged 🧱: https://pooltool.io/realtime/%d\n\n"+
+		// 		"Hash#️⃣: https://cexplorer.io/block/%s\n\n"+
+		// 		"Tx Count🔢: %d\n\n"+
+		// 		"🕰: %s\n\n"+
+		// 		"Epoch"+" %d "+"🧱s Forged: %d\n\n",
+		// 		bech32IssuerVkey, blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash,
+		// 		blockEvent.Payload.TransactionCount, blockEvent.Timestamp, epoch, currBlocks)
 		// 	photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
 		// 	_, err = i.bot.Send(channel, photo)
 		// 	if err != nil {
@@ -342,6 +421,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		broadcast <- transactionEvent
 	}
 
+	// Start error handler in a goroutine
 	go func() {
 		for {
 			err, ok := <-i.pipeline.ErrorChan()
@@ -366,7 +446,6 @@ func (i *Indexer) handleEvent(event event.Event) error {
 	}()
 
 	return nil
-
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
@@ -433,21 +512,6 @@ func convertToBech32(hash string) (string, error) {
 
 // Main function to start the Snek pipeline
 func main() {
-
-	// testing koios
-	api, e := koios.New()
-	if e != nil {
-		log.Fatal(e)
-	}
-
-	res, er := api.GetTip(context.Background(), nil)
-	if er != nil {
-		log.Fatal(er)
-	}
-	fmt.Println("status: ", res.Status)
-	fmt.Println("statu_code: ", res.StatusCode)
-
-	fmt.Println("Epoch: ", res.Data.EpochNo)
 
 	// Start the Snek pipeline
 	if err := globalIndexer.Start(); err != nil {
