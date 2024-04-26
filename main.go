@@ -9,6 +9,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/blinklabs-io/snek/event"
@@ -23,6 +25,9 @@ import (
 	"github.com/spf13/viper"
 	telebot "gopkg.in/tucnak/telebot.v2"
 )
+
+// Define fullBlockSize as a constant
+const fullBlockSize = 87.97
 
 // Channel to broadcast block events to connected clients
 var clients = make(map[*websocket.Conn]bool) // connected clients
@@ -86,6 +91,68 @@ type TransactionEvent struct {
 	Payload   TransactionPayload `json:"payload"`
 }
 
+type Blocks struct {
+	CurrentEpoch int
+	BlockCount   int
+}
+
+// IncrementBlockCount increases the block count by one
+func (p *Blocks) IncrementBlockCount() {
+	p.BlockCount++
+	SaveBlockCount(*p)
+}
+
+// ResetBlockCount resets the block count to zero
+func (p *Blocks) ResetBlockCount() {
+	p.BlockCount = 0
+}
+
+// CheckEpoch checks if the given epoch is the current one. If not, it resets the block count and updates the current epoch
+func (p *Blocks) CheckEpoch(epoch int) {
+	if p.CurrentEpoch != epoch {
+		p.CurrentEpoch = epoch
+		p.ResetBlockCount()
+		SaveBlockCount(*p)
+	}
+}
+
+const persistenceFile = "block_count.json"
+
+// SaveBlockCount persists the current block count and epoch to a file
+func SaveBlockCount(blocks Blocks) {
+	data, err := json.Marshal(blocks)
+	if err != nil {
+		log.Fatalf("Error marshalling block count: %v", err)
+	}
+	err = os.WriteFile(persistenceFile, data, 0644)
+	if err != nil {
+		log.Fatalf("Error writing block count to file: %v", err)
+	}
+}
+
+// LoadBlockCount loads the block count and epoch from a file, or initializes it if the file doesn't exist
+func LoadBlockCount() *Blocks {
+	var blocks Blocks
+	data, err := os.ReadFile(persistenceFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist, so let's initialize it with default Blocks data
+			log.Println("block_count.json does not exist, initializing with default data.")
+			blocks = Blocks{CurrentEpoch: 0, BlockCount: 0} // Adjust with your actual default values
+			SaveBlockCount(blocks)                          // Persist the initial data to file
+		} else {
+			// Some other error occurred
+			log.Fatalf("Error reading block count from file: %v", err)
+		}
+	} else {
+		err = json.Unmarshal(data, &blocks)
+		if err != nil {
+			log.Fatalf("Error unmarshalling block count: %v", err)
+		}
+	}
+	return &blocks
+}
+
 // Indexer struct to manage the Snek pipeline and block events
 type Indexer struct {
 	pipeline         *pipeline.Pipeline
@@ -103,13 +170,30 @@ type Indexer struct {
 	nodeAddresses    []string
 	totalBlocks      uint64
 	poolName         string
+	epoch            int
+	networkMagic     int
+	wg               sync.WaitGroup
 }
 
 // Singleton instance of the Indexer
 var globalIndexer = &Indexer{}
 
+var blockCount = &Blocks{}
+
 // Start the Snek pipeline and handle block events
 func (i *Indexer) Start() error {
+
+	// Increment the WaitGroup counter
+	i.wg.Add(1)
+
+	defer func() {
+		// Decrement the WaitGroup counter when the function exits
+		i.wg.Done()
+
+		if r := recover(); r != nil {
+			log.Println("Recovered in handleEvent", r)
+		}
+	}()
 
 	viper.SetConfigName("config") // name of config file (without extension)
 	viper.AddConfigPath(".")      // look for config in the working directory
@@ -125,6 +209,7 @@ func (i *Indexer) Start() error {
 	i.telegramChannel = viper.GetString("telegram.channel")
 	i.telegramToken = viper.GetString("telegram.token")
 	i.image = viper.GetString("image")
+	i.networkMagic = viper.GetInt("networkMagic")
 
 	// Store the node addresses hosts into the array nodeAddresses in the Indexer
 	i.nodeAddresses = viper.GetStringSlice("nodeAddress.host1")
@@ -142,7 +227,10 @@ func (i *Indexer) Start() error {
 	}
 
 	/// Initialize the kois client
-	i.koios, e = koios.New()
+	i.koios, e = koios.New(
+		koios.Host(koios.PreviewHost),
+		koios.APIVersion("v1"),
+	)
 	if e != nil {
 		log.Fatal(e)
 	}
@@ -152,6 +240,8 @@ func (i *Indexer) Start() error {
 	if err != nil {
 		log.Fatalf("failed to get epoch info: %s", err)
 	}
+
+	i.epoch = int(epochInfo.Data.EpochNo)
 
 	fmt.Println("Epoch: ", epochInfo.Data.EpochNo)
 
@@ -200,7 +290,7 @@ func (i *Indexer) Start() error {
 		node := chainsync.WithAddress(host)
 		inputOpts := []chainsync.ChainSyncOptionFunc{
 			node,
-			chainsync.WithNetworkMagic(764824073),
+			chainsync.WithNetworkMagic(uint32(i.networkMagic)),
 			chainsync.WithIntersectTip(true),
 			chainsync.WithAutoReconnect(true),
 		}
@@ -224,6 +314,7 @@ func (i *Indexer) Start() error {
 			log.Printf("Failed to start pipeline: %s. Retrying...", err)
 			return err
 		}
+
 		return nil
 	}
 
@@ -306,6 +397,16 @@ func (i *Indexer) handleEvent(event event.Event) error {
 			fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
 		}
 
+		// Customize links based on the network magic number
+		var cexplorerLink string
+		if i.networkMagic == 1 {
+			cexplorerLink = "https://preprod.cexplorer.io/block/"
+		} else if i.networkMagic == 2 {
+			cexplorerLink = "https://preview.cexplorer.io/block/"
+		} else {
+			cexplorerLink = "https://cexplorer.io/block/"
+		}
+
 		if blockEvent.Payload.IssuerVkey == i.poolId {
 
 			tipInfo, err := i.koios.GetTip(context.Background(), nil)
@@ -314,63 +415,44 @@ func (i *Indexer) handleEvent(event event.Event) error {
 			}
 
 			// Current epoch
-			epoch := tipInfo.Data.EpochNo
+			epoch := int(tipInfo.Data.EpochNo)
 
-			// Getting the current epoch's blocks made by a specific pool
-			currentEpochBlocks, err := i.koios.GetPoolBlocks(context.Background(), koios.PoolID(i.poolId), &epoch, nil)
-			if err != nil {
-				log.Fatal(err)
-			}
+			blockCount.CheckEpoch(epoch)
+
+			blockCount.IncrementBlockCount()
+
+			// // Getting the current epoch's blocks made by a specific pool
+			// currentEpochBlocks, err := i.koios.GetPoolBlocks(context.Background(), koios.PoolID(i.bech32PoolId), &epoch, nil)
+			// if err != nil {
+			// 	log.Fatal(err)
+			// }
 			// We need to count the length of the json array in order to get the number of blocks
-			currBlocks := len(currentEpochBlocks.Data)
+			// currBlocks := len(currentEpochBlocks.Data)
 
-			msg := fmt.Sprintf("%s\n\n"+
-				"New Block Forged 🧱: https://pooltool.io/realtime/%d\n\n"+
-				"Hash#️⃣: https://cexplorer.io/block/%s\n\n"+
-				"Tx Count🔢: %d\n\n"+
-				"🕰: %s\n\n"+
-				"Epoch"+" (%d) "+"🧱s Forged: %d\n\n"+
-				"Lifetime 🧱s Forged: %d",
-				i.poolName, blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash,
-				blockEvent.Payload.TransactionCount, blockEvent.Timestamp, epoch, currBlocks, i.totalBlocks)
+			blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
+			sizePercentage := (blockSizeKB / fullBlockSize) * 100
+
+			msg := fmt.Sprintf(
+				"New %s Block Forged 🧱"+
+					"Tx Count🔢: %d\n\n"+
+					"Block Size📏: %.2f KB\n\n"+
+					"%.2f%% Full\n\n"+
+					"🕰: %s\n\n"+
+					"Epoch"+" (%d) "+"🧱s Forged: %d\n\n"+
+					"Lifetime 🧱s Forged: %d\n\n"+
+					"Pooltool: https://pooltool.io/realtime/%d\n\n"+
+					"Cexplorer: "+cexplorerLink+"%s\n\n",
+				i.ticker, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
+				blockEvent.Timestamp, epoch,
+				blockCount.BlockCount, i.totalBlocks,
+				blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
+
 			photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
 			_, err = i.bot.Send(channel, photo)
 			if err != nil {
 				log.Printf("failed to send Telegram message: %s", err)
 			}
 		}
-		/// Uncomment the following code to send messages for all pools for testing purposes
-		// } else {
-		// 	tipInfo, err := i.koios.GetTip(context.Background(), nil)
-		// 	if err != nil {
-		// 		log.Fatalf("failed to get epoch info: %s", err)
-		// 	}
-
-		// 	// Current epoch
-		// 	epoch := tipInfo.Data.EpochNo
-
-		// 	// Getting the current epoch's blocks made by a specific pool
-		// 	currentEpochBlocks, err := i.koios.GetPoolBlocks(context.Background(), koios.PoolID(bech32IssuerVkey), &epoch, nil)
-		// 	if err != nil {
-		// 		log.Fatal(err)
-		// 	}
-		// 	// We need to count the length of the json array in order to get the number of blocks
-		// 	currBlocks := len(currentEpochBlocks.Data)
-
-		// 	msg := fmt.Sprintf("%s\n\n"+
-		// 		"New Block Forged 🧱: https://pooltool.io/realtime/%d\n\n"+
-		// 		"Hash#️⃣: https://cexplorer.io/block/%s\n\n"+
-		// 		"Tx Count🔢: %d\n\n"+
-		// 		"🕰: %s\n\n"+
-		// 		"Epoch"+" %d "+"🧱s Forged: %d\n\n",
-		// 		bech32IssuerVkey, blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash,
-		// 		blockEvent.Payload.TransactionCount, blockEvent.Timestamp, epoch, currBlocks)
-		// 	photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
-		// 	_, err = i.bot.Send(channel, photo)
-		// 	if err != nil {
-		// 		log.Printf("failed to send Telegram message: %s", err)
-		// 	}
-		// }
 
 		// Update the currentEvent field in the Indexer
 		i.blockEvent = blockEvent
@@ -513,14 +595,12 @@ func convertToBech32(hash string) (string, error) {
 // Main function to start the Snek pipeline
 func main() {
 
+	blockCount = LoadBlockCount()
+
 	// Start the Snek pipeline
 	if err := globalIndexer.Start(); err != nil {
 		log.Fatalf("failed to start snek: %s", err)
 	}
-
-	// Create a simple file server
-	fs := http.FileServer(http.Dir("../public"))
-	http.Handle("/", fs)
 
 	// Configure websocket route
 	http.HandleFunc("/ws", handleConnections)
@@ -528,9 +608,12 @@ func main() {
 	// Start listening for incoming chat messages
 	go handleMessages()
 
+	// Wait for all goroutines to finish before exiting
+	globalIndexer.wg.Wait()
+
 	// Start the server on localhost port 8080 and log any errors
-	log.Println("http server started on :8008")
-	err := http.ListenAndServe("localhost:8008", nil)
+	log.Println("http server started on :8080")
+	err := http.ListenAndServe("localhost:8080", nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
