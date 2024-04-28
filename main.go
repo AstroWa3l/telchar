@@ -226,13 +226,31 @@ func (i *Indexer) Start() error {
 		log.Fatalf("failed to start bot: %s", err)
 	}
 
-	/// Initialize the kois client
-	i.koios, e = koios.New(
-		koios.Host(koios.PreviewHost),
-		koios.APIVersion("v1"),
-	)
-	if e != nil {
-		log.Fatal(e)
+	/// Initialize the kois client based on networkMagic number
+	if i.networkMagic == 1 {
+		i.koios, e = koios.New(
+			koios.Host(koios.PreProdHost),
+			koios.APIVersion("v1"),
+		)
+		if e != nil {
+			log.Fatal(e)
+		}
+	} else if i.networkMagic == 2 {
+		i.koios, e = koios.New(
+			koios.Host(koios.PreviewHost),
+			koios.APIVersion("v1"),
+		)
+		if e != nil {
+			log.Fatal(e)
+		}
+	} else {
+		i.koios, e = koios.New(
+			koios.Host(koios.MainnetHost),
+			koios.APIVersion("v1"),
+		)
+		if e != nil {
+			log.Fatal(e)
+		}
 	}
 
 	// Get the current epoch
