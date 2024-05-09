@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blinklabs-io/snek/event"
-	filter_event "github.com/blinklabs-io/snek/filter/event"
-	"github.com/blinklabs-io/snek/input/chainsync"
-	output_embedded "github.com/blinklabs-io/snek/output/embedded"
-	"github.com/blinklabs-io/snek/pipeline"
+	"github.com/blinklabs-io/adder/event"
+	filter_event "github.com/blinklabs-io/adder/filter/event"
+	"github.com/blinklabs-io/adder/input/chainsync"
+	output_embedded "github.com/blinklabs-io/adder/output/embedded"
+	"github.com/blinklabs-io/adder/pipeline"
 	"github.com/btcsuite/btcutil/bech32"
 	koios "github.com/cardano-community/koios-go-client/v3"
 	"github.com/cenkalti/backoff/v4"
@@ -154,7 +154,7 @@ func LoadBlockCount() *Blocks {
 	return &blocks
 }
 
-// Indexer struct to manage the Snek pipeline and block events
+// Indexer struct to manage the adder pipeline and block events
 type Indexer struct {
 	pipeline         *pipeline.Pipeline
 	blockEvent       BlockEvent
@@ -189,7 +189,7 @@ var globalIndexer = &Indexer{}
 
 var blockCount = &Blocks{}
 
-// Start the Snek pipeline and handle block events
+// Start the adder pipeline and handle block events
 func (i *Indexer) Start() error {
 
 	// Increment the WaitGroup counter
@@ -378,7 +378,7 @@ func (i *Indexer) Start() error {
 
 }
 
-// Handle block events received from the Snek pipeline
+// Handle block events received from the adder pipeline
 func (i *Indexer) handleEvent(event event.Event) error {
 
 	defer func() {
@@ -646,14 +646,14 @@ func convertToBech32(hash string) (string, error) {
 	return bech32Str, nil
 }
 
-// Main function to start the Snek pipeline
+// Main function to start the adder pipeline
 func main() {
 
 	blockCount = LoadBlockCount()
 
-	// Start the Snek pipeline
+	// Start the adder pipeline
 	if err := globalIndexer.Start(); err != nil {
-		log.Fatalf("failed to start snek: %s", err)
+		log.Fatalf("failed to start adder: %s", err)
 	}
 
 	// Configure websocket route
