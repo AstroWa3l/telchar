@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"os"
 	"sync"
 	"time"
@@ -175,6 +176,14 @@ type Indexer struct {
 	wg               sync.WaitGroup
 }
 
+// TwitterCredentials represents the Twitter API credentials
+type TwitterCredentials struct {
+	ConsumerKey       string `json:"consumer_key"`
+	ConsumerSecret    string `json:"consumer_secret"`
+	AccessToken       string `json:"access_token"`
+	AccessTokenSecret string `json:"access_token_secret"`
+}
+
 // Singleton instance of the Indexer
 var globalIndexer = &Indexer{}
 
@@ -300,7 +309,20 @@ func (i *Indexer) Start() error {
 		i.poolName = ""
 	}
 
-	const maxRetries = 3
+    channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
+    if err != nil {
+        log.Fatalf("failed to parse telegram channel ID: %s", err)
+    }
+
+    initMessage := fmt.Sprintf("duckBot initiated!\n\n %s\n Epoch: %d\n Lifetime Blocks: %d\n\n Quack Will Robinson, QUACK!",
+        i.poolName, epochInfo.Data.EpochNo, i.totalBlocks)
+
+    _, err = i.bot.Send(&telebot.Chat{ID: channelID}, initMessage)
+    if err != nil {
+        log.Printf("failed to send Telegram message: %s", err)
+    }
+
+    const maxRetries = 3
 
 	// Wrap the pipeline start in a function for the backoff operation
 	startPipelineFunc := func(host string) error {
@@ -451,18 +473,17 @@ func (i *Indexer) handleEvent(event event.Event) error {
 			sizePercentage := (blockSizeKB / fullBlockSize) * 100
 
 			msg := fmt.Sprintf(
-				"New %s Block Forged 🧱"+
-					"Tx Count🔢: %d\n\n"+
-					"Block Size📏: %.2f KB\n\n"+
+				"Quack!(attention) 🦆\nduckBot notification!\n\n"+"%s\n"+"💥 New Block!\n\n"+
+					"Tx Count: %d\n"+
+					"Block Size: %.2f KB\n"+
 					"%.2f%% Full\n\n"+
-					"🕰: %s\n\n"+
-					"Epoch"+" (%d) "+"🧱s Forged: %d\n\n"+
-					"Lifetime 🧱s Forged: %d\n\n"+
+					"Epoch %d\n"+
+					"Blocks: %d\n"+
+					"Lifetime Blocks: %d\n\n"+
 					"Pooltool: https://pooltool.io/realtime/%d\n\n"+
-					"Cexplorer: "+cexplorerLink+"%s\n\n",
+					"Cexplorer: "+cexplorerLink+"%s",
 				i.ticker, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
-				blockEvent.Timestamp, epoch,
-				blockCount.BlockCount, i.totalBlocks,
+				epoch, blockCount.BlockCount, i.totalBlocks,
 				blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
 
 			photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
