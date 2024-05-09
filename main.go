@@ -9,8 +9,8 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -309,20 +309,20 @@ func (i *Indexer) Start() error {
 		i.poolName = ""
 	}
 
-    channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
-    if err != nil {
-        log.Fatalf("failed to parse telegram channel ID: %s", err)
-    }
+	channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
+	if err != nil {
+		log.Fatalf("failed to parse telegram channel ID: %s", err)
+	}
 
-    initMessage := fmt.Sprintf("duckBot initiated!\n\n %s\n Epoch: %d\n Lifetime Blocks: %d\n\n Quack Will Robinson, QUACK!",
-        i.poolName, epochInfo.Data.EpochNo, i.totalBlocks)
+	initMessage := fmt.Sprintf("duckBot initiated!\n\n %s\n Epoch: %d\n Lifetime Blocks: %d\n\n Quack Will Robinson, QUACK!",
+		i.poolName, epochInfo.Data.EpochNo, i.totalBlocks)
 
-    _, err = i.bot.Send(&telebot.Chat{ID: channelID}, initMessage)
-    if err != nil {
-        log.Printf("failed to send Telegram message: %s", err)
-    }
+	_, err = i.bot.Send(&telebot.Chat{ID: channelID}, initMessage)
+	if err != nil {
+		log.Printf("failed to send Telegram message: %s", err)
+	}
 
-    const maxRetries = 3
+	const maxRetries = 3
 
 	// Wrap the pipeline start in a function for the backoff operation
 	startPipelineFunc := func(host string) error {
@@ -486,7 +486,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 				epoch, blockCount.BlockCount, i.totalBlocks,
 				blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
 
-			photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
+			photo := &telebot.Photo{File: telebot.FromURL(getDuckImage()), Caption: msg}
 			_, err = i.bot.Send(channel, photo)
 			if err != nil {
 				log.Printf("failed to send Telegram message: %s", err)
@@ -610,6 +610,21 @@ func handleMessages() {
 			}
 		}
 	}
+}
+
+// Function to make a request to random duck image API
+func getDuckImage() string {
+	resp, err := http.Get("https://random-d.uk/api/v2/random")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	imageURL := result["url"].(string)
+	return imageURL
 }
 
 func convertToBech32(hash string) (string, error) {

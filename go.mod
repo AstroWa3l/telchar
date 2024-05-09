@@ -1,4 +1,4 @@
-module snek-web
+module duckBot
 
 go 1.20
 
