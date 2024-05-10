@@ -482,7 +482,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 					"Lifetime Blocks: %d\n\n"+
 					"Pooltool: https://pooltool.io/realtime/%d\n\n"+
 					"Cexplorer: "+cexplorerLink+"%s",
-				i.ticker, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
+				i.poolName, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
 				epoch, blockCount.BlockCount, i.totalBlocks,
 				blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
 
