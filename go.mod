@@ -1,6 +1,8 @@
 module duckBot
 
-go 1.20
+go 1.21
+
+toolchain go1.22.3
 
 require (
 	github.com/blinklabs-io/adder v0.19.0
