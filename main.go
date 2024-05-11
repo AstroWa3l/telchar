@@ -30,6 +30,13 @@ import (
 // Define fullBlockSize as a constant
 const fullBlockSize = 87.97
 const persistenceFile = "block_count.json"
+const (
+	EpochDurationInDays = 5
+	ShelleyStartSlot    = 4492800
+	SecondsInDay        = 24 * 60 * 60
+	ShelleyEpochStart   = "2020-07-29T21:44:51Z"
+	StartingEpoch       = 208
+  )
 
 // Singleton instance of the Indexer
 var globalIndexer = &Indexer{}
@@ -48,7 +55,6 @@ var upgrader = websocket.Upgrader{
 // Indexer struct to manage the adder pipeline and block events
 type Indexer struct {
 	pipeline        *pipeline.Pipeline
-//	blockEvent      BlockEvent
 	bot             *telebot.Bot
 	poolId          string
 	telegramChannel string
@@ -84,6 +90,25 @@ type Blocks struct {
 	CurrentEpoch int
 	BlockCount   int
 }
+
+// Function to calculate the current epoch number
+func getCurrentEpoch() int {
+	// Parse the Shelley epoch start time
+	shelleyStartTime, err := time.Parse(time.RFC3339, ShelleyEpochStart)
+	if err != nil {
+	  fmt.Println("Error parsing Shelley start time:", err)
+	  return -1
+	}
+	// Calculate the elapsed time since Shelley start in seconds
+	elapsedSeconds := time.Since(shelleyStartTime).Seconds()
+	// Calculate the number of epochs elapsed
+	epochsElapsed := int(elapsedSeconds / (EpochDurationInDays * SecondsInDay))
+	// Calculate the current epoch number
+	currentEpoch := StartingEpoch + epochsElapsed
+  
+	return currentEpoch
+  }
+  
 
 // IncrementBlockCount increases the block count by one
 func (p *Blocks) IncrementBlockCount() {
@@ -162,11 +187,12 @@ func (i *Indexer) Start() error {
 
 	// Set the configuration values
 	i.poolId = viper.GetString("poolId")
+	i.ticker = viper.GetString("ticker")
+	i.poolName = viper.GetString("poolName")
 	i.telegramChannel = viper.GetString("telegram.channel")
 	i.telegramToken = viper.GetString("telegram.token")
 	i.image = viper.GetString("image")
 	i.networkMagic = viper.GetInt("networkMagic")
-
 	// Store the node addresses hosts into the array nodeAddresses in the Indexer
 	i.nodeAddresses = viper.GetStringSlice("nodeAddress.host1")
 	i.nodeAddresses = append(i.nodeAddresses, viper.GetStringSlice("nodeAddress.host2")...)
@@ -208,13 +234,8 @@ func (i *Indexer) Start() error {
 		}
 	}
 
-	// Get the current epoch
-	epochInfo, err := i.koios.GetTip(context.Background(), nil)
-	if err != nil {
-		log.Fatalf("failed to get epoch info: %s", err)
-	}
-	i.epoch = int(epochInfo.Data.EpochNo)
-	fmt.Println("Epoch: ", epochInfo.Data.EpochNo)
+	i.epoch = getCurrentEpoch()
+	fmt.Println("Epoch: ", i.epoch)
 	// Convert the poolId to Bech32
 	bech32PoolId, err := convertToBech32(i.poolId)
 	if err != nil {
@@ -225,35 +246,35 @@ func (i *Indexer) Start() error {
 	// Set the bech32PoolId field in the Indexer
 	i.bech32PoolId = bech32PoolId
 	// Get pool info
-	poolInfo, err := i.koios.GetPoolInfo(context.Background(), koios.PoolID(i.bech32PoolId), nil)
+	lifetimeBlocks, err := i.koios.GetPoolInfo(context.Background(), koios.PoolID(i.bech32PoolId), nil)
 	if err != nil {
 		log.Fatalf("failed to get pool lifetime blocks: %s", err)
 	}
 
-	if poolInfo.Data != nil {
-		i.totalBlocks = poolInfo.Data.BlockCount
+	if lifetimeBlocks.Data != nil {
+		i.totalBlocks = lifetimeBlocks.Data.BlockCount
 		fmt.Println("Total Blocks: ", i.totalBlocks)
 	} else {
 		log.Fatalf("failed to get pool lifetime blocks: %s", err)
 	}
-	// Get pool ticker
-	if poolInfo.Data.MetaJSON.Ticker != nil {
-		i.ticker = *poolInfo.Data.MetaJSON.Ticker
-	} else {
-		i.ticker = ""
-	}
+//	// Get pool ticker
+//	if poolInfo.Data.MetaJSON.Ticker != nil {
+//		i.ticker = *poolInfo.Data.MetaJSON.Ticker
+//	} else {
+//		i.ticker = ""
+//	}
 	// Get pool name
-	if poolInfo.Data.MetaJSON.Name != nil {
-		i.poolName = *poolInfo.Data.MetaJSON.Name
-	} else {
-		i.poolName = ""
-	}
+//	if poolInfo.Data.MetaJSON.Name != nil {
+//		i.poolName = *poolInfo.Data.MetaJSON.Name
+//	} else {
+//		i.poolName = ""
+//	}
 	channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
 	if err != nil {
 		log.Fatalf("failed to parse telegram channel ID: %s", err)
 	}
 	initMessage := fmt.Sprintf("duckBot initiated!\n\n %s\n Epoch: %d\n Lifetime Blocks: %d\n\n Quack Will Robinson, QUACK!",
-		i.poolName, epochInfo.Data.EpochNo, i.totalBlocks)
+		i.poolName, i.epoch, i.totalBlocks)
 
 	_, err = i.bot.Send(&telebot.Chat{ID: channelID}, initMessage)
 	if err != nil {
@@ -357,15 +378,15 @@ func (i *Indexer) handleEvent(event event.Event) error {
 
     // If the block event is from the pool, process it
     if blockEvent.Payload.IssuerVkey == i.poolId {
-        tipInfo, err := i.koios.GetTip(context.Background(), nil)
-        if err != nil {
-            log.Fatalf("failed to get epoch info: %s", err)
-        }
+//        tipInfo, err := i.koios.GetTip(context.Background(), nil)
+//        if err != nil {
+//            log.Fatalf("failed to get epoch info: %s", err)
+//        }
 
         // Current epoch
-        epoch := int(tipInfo.Data.EpochNo)
+ //       epoch := i.epoch
 
-        blockCount.CheckEpoch(epoch)
+        blockCount.CheckEpoch(i.epoch)
         blockCount.IncrementBlockCount()
 
         blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
@@ -382,7 +403,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
                 "Pooltool: https://pooltool.io/realtime/%d\n\n"+
                 "Cexplorer: "+cexplorerLink+"%s",
             i.poolName, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
-            epoch, blockCount.BlockCount, i.totalBlocks,
+            i.epoch, blockCount.BlockCount, i.totalBlocks,
             blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
 
         // Send the message to the appropriate channel
