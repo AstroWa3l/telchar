@@ -315,11 +315,11 @@ func (i *Indexer) handleEvent(event event.Event) error {
     fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
 
     // Convert issuer Vkey to Bech32
-    bech32IssuerVkey, err := convertToBech32(blockEvent.Payload.IssuerVkey)
+    bech32PoolID, err := convertToBech32(blockEvent.Payload.IssuerVkey)
     if err != nil {
         log.Printf("failed to convert issuer vkey to Bech32: %s", err)
     } else {
-        fmt.Printf("IssuerVkey: %s\n", bech32IssuerVkey)
+        fmt.Printf("Bech32 poolID: %s\n", bech32PoolID)
     }
 
 	// Customize links based on the network magic number
