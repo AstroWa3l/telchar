@@ -63,6 +63,7 @@ type Indexer struct {
 	ticker          string
 	koios           *koios.Client
 	bech32PoolId    string
+	epochBlocks     int
 	nodeAddresses   []string
 	totalBlocks     uint64
 	poolName        string
@@ -237,12 +238,25 @@ func (i *Indexer) Start() error {
 
 	// Set the bech32PoolId field in the Indexer
 	i.bech32PoolId = bech32PoolId
-	// Get pool info
+	// Get lifetime blocks
 	lifetimeBlocks, err := i.koios.GetPoolInfo(context.Background(), koios.PoolID(i.bech32PoolId), nil)
 	if err != nil {
 		log.Fatalf("failed to get pool lifetime blocks: %s", err)
 	}
 
+	// Set the bech32PoolId field in the Indexer
+	i.bech32PoolId = bech32PoolId
+	// Get epoch blocks
+	epoch := koios.EpochNo(i.epoch)
+	epochBlocks, err := i.koios.GetPoolBlocks(context.Background(), koios.PoolID(i.bech32PoolId), &epoch, nil)
+
+	if epochBlocks.Data != nil {
+		i.epochBlocks = len(epochBlocks.Data)
+		fmt.Println("Epoch Blocks: ", i.epochBlocks)
+	} else {
+		log.Fatalf("failed to get pool lifetime blocks: %s", err)
+	}
+	
 	if lifetimeBlocks.Data != nil {
 		i.totalBlocks = lifetimeBlocks.Data.BlockCount
 		fmt.Println("Total Blocks: ", i.totalBlocks)
