@@ -25,9 +25,8 @@ import (
 	telebot "gopkg.in/tucnak/telebot.v2"
 )
 
-// Define fullBlockSize as a constant
-const fullBlockSize = 87.97
 const (
+	fullBlockSize = 87.97
 	EpochDurationInDays = 5
 	ShelleyStartSlot    = 4492800
 	SecondsInDay        = 24 * 60 * 60
@@ -361,7 +360,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 				"Block Size: %.2f KB\n"+
 				"%.2f%% Full\n\n"+
 				"Time Between: %s\n"+
-				"Blocks: %d\n"+
+				"Epoch Blocks: %d\n"+
 				"Lifetime Blocks: %d\n\n"+
 				"Pooltool: https://pooltool.io/realtime/%d\n\n"+
 				"Cexplorer: "+cexplorerLink+"%s",
