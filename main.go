@@ -27,7 +27,6 @@ import (
 
 // Define fullBlockSize as a constant
 const fullBlockSize = 87.97
-//const persistenceFile = "block_count.json"
 const (
 	EpochDurationInDays = 5
 	ShelleyStartSlot    = 4492800
