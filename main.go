@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+//	"io"
 	"log"
 	"net/http"
 	"os"
@@ -48,7 +48,7 @@ var upgrader = websocket.Upgrader{
 // Indexer struct to manage the adder pipeline and block events
 type Indexer struct {
 	pipeline        *pipeline.Pipeline
-	blockEvent      BlockEvent
+//	blockEvent      BlockEvent
 	bot             *telebot.Bot
 	poolId          string
 	telegramChannel string
@@ -277,7 +277,7 @@ func (i *Indexer) Start() error {
 		i.pipeline.AddInput(input_chainsync)
 
 		// Configure filter to handle events
-		filterEvent := filter_event.New(filter_event.WithTypes([]string{"chainsync.block", "chainsync.rollback"}))
+		filterEvent := filter_event.New(filter_event.WithTypes([]string{"chainsync.block"}))
 		i.pipeline.AddFilter(filterEvent)
 
 		// Configure embedded output with callback function
@@ -315,154 +315,97 @@ func (i *Indexer) Start() error {
 
 // Handle block events received from the adder pipeline
 func (i *Indexer) handleEvent(event event.Event) error {
+    // Marshal the event to JSON
+    data, err := json.Marshal(event)
+    if err != nil {
+        return fmt.Errorf("error marshalling event: %v", err)
+    }
 
-	defer func() {
-		if r := recover(); r != nil {
-			log.Println("Recovered in handleEvent", r)
-		}
-	}()
+    // Unmarshal the event to get the block event details
+    var blockEvent BlockEvent
+    err = json.Unmarshal(data, &blockEvent)
+    if err != nil {
+        return fmt.Errorf("error unmarshalling block event: %v", err)
+    }
 
-	// Marshal the event to JSON
-	data, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("error unmarshalling event: %v", err)
-	}
+    // Convert the block event timestamp to local time
+    parsedTime, err := time.Parse(time.RFC3339, blockEvent.Timestamp)
+    if err == nil {
+        localTime := parsedTime.In(time.Local)
+        blockEvent.Timestamp = localTime.Format("January 2, 2006 15:04:05 MST")
+        fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
+    }
 
-	if len(data) == 0 {
-		return fmt.Errorf("no data to unmarshal")
-	}
+    // Convert issuer Vkey to Bech32
+    bech32IssuerVkey, err := convertToBech32(blockEvent.Payload.IssuerVkey)
+    if err != nil {
+        log.Printf("failed to convert issuer vkey to Bech32: %s", err)
+    } else {
+        fmt.Printf("IssuerVkey: %s\n", bech32IssuerVkey)
+    }
 
-	// Unmarshal the event to get the event type
-	var getEvent map[string]interface{}
-	errr := json.Unmarshal(data, &getEvent)
-	if errr != nil {
-		return err
-	}
+    // Customize links based on the network magic number
+    var cexplorerLink string
+    switch i.networkMagic {
+    case 1:
+        cexplorerLink = "https://preprod.cexplorer.io/block/"
+    case 2:
+        cexplorerLink = "https://preview.cexplorer.io/block/"
+    default:
+        cexplorerLink = "https://cexplorer.io/block/"
+    }
 
-	eventType, ok := getEvent["type"].(string)
-	if !ok {
-		return fmt.Errorf("failed to get event type")
-	}
+    // If the block event is from the pool, process it
+    if blockEvent.Payload.IssuerVkey == i.poolId {
+        tipInfo, err := i.koios.GetTip(context.Background(), nil)
+        if err != nil {
+            log.Fatalf("failed to get epoch info: %s", err)
+        }
 
-	channel, err := i.bot.ChatByID(i.telegramChannel)
-	if err != nil {
-		panic(err) // You should add better error handling than this!
-	}
+        // Current epoch
+        epoch := int(tipInfo.Data.EpochNo)
 
-	switch eventType {
-	case "chainsync.block":
+        blockCount.CheckEpoch(epoch)
+        blockCount.IncrementBlockCount()
 
-		var blockEvent BlockEvent
-		err := json.Unmarshal(data, &blockEvent)
-		if err != nil {
-			return fmt.Errorf("error unmarshalling block event: %v", err)
-		}
+        blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
+        sizePercentage := (blockSizeKB / fullBlockSize) * 100
 
-		bech32IssuerVkey, err := convertToBech32(blockEvent.Payload.IssuerVkey)
-		if err != nil {
-			log.Printf("failed to convert issuer vkey to Bech32: %s", err)
-		} else {
-			fmt.Printf("IssuerVkey: %s\n", bech32IssuerVkey)
-		}
+        msg := fmt.Sprintf(
+            "Quack!(attention) 🦆\nduckBot notification!\n\n"+"%s\n"+"💥 New Block!\n\n"+
+                "Tx Count: %d\n"+
+                "Block Size: %.2f KB\n"+
+                "%.2f%% Full\n\n"+
+                "Epoch %d\n"+
+                "Blocks: %d\n"+
+                "Lifetime Blocks: %d\n\n"+
+                "Pooltool: https://pooltool.io/realtime/%d\n\n"+
+                "Cexplorer: "+cexplorerLink+"%s",
+            i.poolName, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
+            epoch, blockCount.BlockCount, i.totalBlocks,
+            blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
 
-		parsedTime, err := time.Parse(time.RFC3339, blockEvent.Timestamp)
-		if err == nil {
-			localTime := parsedTime.In(time.Local)
-			blockEvent.Timestamp = localTime.Format("January 2, 2006 15:04:05 MST")
-			fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
-		}
+        // Send the message to the appropriate channel
+        channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
+        if err != nil {
+            log.Fatalf("failed to parse telegram channel ID: %s", err)
+        }
+        photo := &telebot.Photo{File: telebot.FromURL(getDuckImage()), Caption: msg}
+        _, err = i.bot.Send(&telebot.Chat{ID: channelID}, photo)
+        if err != nil {
+            log.Printf("failed to send Telegram message: %s", err)
+        }
+    }
 
-		// Customize links based on the network magic number
-		var cexplorerLink string
-		if i.networkMagic == 1 {
-			cexplorerLink = "https://preprod.cexplorer.io/block/"
-		} else if i.networkMagic == 2 {
-			cexplorerLink = "https://preview.cexplorer.io/block/"
-		} else {
-			cexplorerLink = "https://cexplorer.io/block/"
-		}
+    // Print the received event information
+    fmt.Printf("Received Event: %+v\n", blockEvent)
 
-		if blockEvent.Payload.IssuerVkey == i.poolId {
+    // Send the block event to the WebSocket clients
+    broadcast <- blockEvent
 
-			tipInfo, err := i.koios.GetTip(context.Background(), nil)
-			if err != nil {
-				log.Fatalf("failed to get epoch info: %s", err)
-			}
-
-			// Current epoch
-			epoch := int(tipInfo.Data.EpochNo)
-
-			blockCount.CheckEpoch(epoch)
-
-			blockCount.IncrementBlockCount()
-
-			// // Getting the current epoch's blocks made by a specific pool
-			// currentEpochBlocks, err := i.koios.GetPoolBlocks(context.Background(), koios.PoolID(i.bech32PoolId), &epoch, nil)
-			// if err != nil {
-			// 	log.Fatal(err)
-			// }
-			// We need to count the length of the json array in order to get the number of blocks
-			// currBlocks := len(currentEpochBlocks.Data)
-
-			blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
-			sizePercentage := (blockSizeKB / fullBlockSize) * 100
-
-			msg := fmt.Sprintf(
-				"Quack!(attention) 🦆\nduckBot notification!\n\n"+"%s\n"+"💥 New Block!\n\n"+
-					"Tx Count: %d\n"+
-					"Block Size: %.2f KB\n"+
-					"%.2f%% Full\n\n"+
-					"Epoch %d\n"+
-					"Blocks: %d\n"+
-					"Lifetime Blocks: %d\n\n"+
-					"Pooltool: https://pooltool.io/realtime/%d\n\n"+
-					"Cexplorer: "+cexplorerLink+"%s",
-				i.poolName, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
-				epoch, blockCount.BlockCount, i.totalBlocks,
-				blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
-
-			photo := &telebot.Photo{File: telebot.FromURL(getDuckImage()), Caption: msg}
-			_, err = i.bot.Send(channel, photo)
-			if err != nil {
-				log.Printf("failed to send Telegram message: %s", err)
-			}
-		}
-
-		// Update the currentEvent field in the Indexer
-		i.blockEvent = blockEvent
-
-		fmt.Printf("Received Event: %+v\n", blockEvent)
-
-		// Send the block event to the WebSocket clients
-		broadcast <- blockEvent
-	}
-
-	// Start error handler in a goroutine
-	go func() {
-		for {
-			err, ok := <-i.pipeline.ErrorChan()
-			if ok {
-				if errors.Is(err, io.EOF) {
-					log.Println("Input source is exhausted, stopping pipeline...")
-					i.pipeline.Stop()
-					time.Sleep(time.Second * 10) // wait for 10 seconds
-					log.Println("Restarting pipeline...")
-					if err := i.pipeline.Start(); err != nil {
-						log.Fatalf("failed to restart pipeline: %s\n", err)
-					}
-				} else {
-					log.Printf("pipeline failed: %s\n", err)
-					log.Println("Restarting pipeline...")
-					if err := i.pipeline.Start(); err != nil {
-						log.Fatalf("failed to restart pipeline: %s\n", err)
-					}
-				}
-			}
-		}
-	}()
-
-	return nil
+    return nil
 }
+
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
 	// Upgrade initial GET request to a websocket
