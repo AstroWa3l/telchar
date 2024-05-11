@@ -6,10 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	//	"io"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -29,7 +27,7 @@ import (
 
 // Define fullBlockSize as a constant
 const fullBlockSize = 87.97
-const persistenceFile = "block_count.json"
+//const persistenceFile = "block_count.json"
 const (
 	EpochDurationInDays = 5
 	ShelleyStartSlot    = 4492800
@@ -53,7 +51,6 @@ var upgrader = websocket.Upgrader{
 
 // Singleton instance of the Indexer
 var globalIndexer = &Indexer{}
-var blockCount = &Blocks{}
 
 // Indexer struct to manage the adder pipeline and block events
 type Indexer struct {
@@ -82,11 +79,6 @@ type BlockEvent struct {
 	Payload   chainsync.BlockEvent   `json:"payload"`
 }
 
-type Blocks struct {
-	CurrentEpoch int
-	BlockCount   int
-}
-
 // Function to calculate the current epoch number
 func getCurrentEpoch() int {
 	// Parse the Shelley epoch start time
@@ -103,61 +95,6 @@ func getCurrentEpoch() int {
 	currentEpoch := StartingEpoch + epochsElapsed
 
 	return currentEpoch
-}
-
-// IncrementBlockCount increases the block count by one
-func (p *Blocks) IncrementBlockCount() {
-	p.BlockCount++
-	SaveBlockCount(*p)
-}
-
-// ResetBlockCount resets the block count to zero
-func (p *Blocks) ResetBlockCount() {
-	p.BlockCount = 0
-}
-
-// CheckEpoch checks if the given epoch is the current one. If not, it resets the block count and updates the current epoch
-func (p *Blocks) CheckEpoch(epoch int) {
-	if p.CurrentEpoch != epoch {
-		p.CurrentEpoch = epoch
-		p.ResetBlockCount()
-		SaveBlockCount(*p)
-	}
-}
-
-// SaveBlockCount persists the current block count and epoch to a file
-func SaveBlockCount(blocks Blocks) {
-	data, err := json.Marshal(blocks)
-	if err != nil {
-		log.Fatalf("Error marshalling block count: %v", err)
-	}
-	err = os.WriteFile(persistenceFile, data, 0644)
-	if err != nil {
-		log.Fatalf("Error writing block count to file: %v", err)
-	}
-}
-
-// LoadBlockCount loads the block count and epoch from a file, or initializes it if the file doesn't exist
-func LoadBlockCount() *Blocks {
-	var blocks Blocks
-	data, err := os.ReadFile(persistenceFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// File doesn't exist, so let's initialize it with default Blocks data
-			log.Println("block_count.json does not exist, initializing with default data.")
-			blocks = Blocks{CurrentEpoch: 0, BlockCount: 0} // Adjust with your actual default values
-			SaveBlockCount(blocks)                          // Persist the initial data to file
-		} else {
-			// Some other error occurred
-			log.Fatalf("Error reading block count from file: %v", err)
-		}
-	} else {
-		err = json.Unmarshal(data, &blocks)
-		if err != nil {
-			log.Fatalf("Error unmarshalling block count: %v", err)
-		}
-	}
-	return &blocks
 }
 
 // Start the adder pipeline and handle block events
@@ -266,18 +203,6 @@ func (i *Indexer) Start() error {
 	} else {
 		log.Fatalf("failed to get pool lifetime blocks: %s", err)
 	}
-	//	// Get pool ticker
-	//	if poolInfo.Data.MetaJSON.Ticker != nil {
-	//		i.ticker = *poolInfo.Data.MetaJSON.Ticker
-	//	} else {
-	//		i.ticker = ""
-	//	}
-	// Get pool name
-	//	if poolInfo.Data.MetaJSON.Name != nil {
-	//		i.poolName = *poolInfo.Data.MetaJSON.Name
-	//	} else {
-	//		i.poolName = ""
-	//	}
 	channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
 	if err != nil {
 		log.Fatalf("failed to parse telegram channel ID: %s", err)
@@ -410,17 +335,6 @@ func (i *Indexer) handleEvent(event event.Event) error {
 
 	// If the block event is from the pool, process it
 	if blockEvent.Payload.IssuerVkey == i.poolId {
-		//        tipInfo, err := i.koios.GetTip(context.Background(), nil)
-		//        if err != nil {
-		//            log.Fatalf("failed to get epoch info: %s", err)
-		//        }
-
-		// Current epoch
-		//       epoch := i.epoch
-
-		blockCount.CheckEpoch(i.epoch)
-		blockCount.IncrementBlockCount()
-
 		blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
 		sizePercentage := (blockSizeKB / fullBlockSize) * 100
 
@@ -447,13 +361,12 @@ func (i *Indexer) handleEvent(event event.Event) error {
 				"Block Size: %.2f KB\n"+
 				"%.2f%% Full\n\n"+
 				"Time Between: %s\n"+
-				"Epoch %d\n"+
 				"Blocks: %d\n"+
 				"Lifetime Blocks: %d\n\n"+
 				"Pooltool: https://pooltool.io/realtime/%d\n\n"+
 				"Cexplorer: "+cexplorerLink+"%s",
 			i.poolName, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
-			timeDiffString, i.epoch, blockCount.BlockCount, i.totalBlocks,
+			timeDiffString, i.epochBlocks, i.totalBlocks,
 			blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
 
 		// Send the message to the appropriate channel
@@ -550,7 +463,6 @@ func convertToBech32(hash string) (string, error) {
 
 // Main function to start the adder pipeline
 func main() {
-	blockCount = LoadBlockCount()
 
 	// Start the adder pipeline
 	if err := globalIndexer.Start(); err != nil {
