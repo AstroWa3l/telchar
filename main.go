@@ -38,7 +38,7 @@ const (
 
 // Define a variable to store the timestamp of the previous block event
 var prevBlockTimestamp time.Time
-
+var epochBlocks uint
 // Channel to broadcast block events to connected clients
 var clients = make(map[*websocket.Conn]bool) // connected clients
 var broadcast = make(chan interface{})       // broadcast channel
@@ -194,7 +194,7 @@ func (i *Indexer) Start() error {
 		i.epochBlocks = len(epochBlocks.Data)
 		fmt.Println("Epoch Blocks: ", i.epochBlocks)
 	} else {
-		log.Fatalf("failed to get pool lifetime blocks: %s", err)
+		log.Fatalf("failed to get pool epoch blocks: %s", err)
 	}
 	
 	if lifetimeBlocks.Data != nil {
@@ -207,8 +207,8 @@ func (i *Indexer) Start() error {
 	if err != nil {
 		log.Fatalf("failed to parse telegram channel ID: %s", err)
 	}
-	initMessage := fmt.Sprintf("duckBot initiated!\n\n %s\n Epoch: %d\n Lifetime Blocks: %d\n\n Quack Will Robinson, QUACK!",
-		i.poolName, i.epoch, i.totalBlocks)
+	initMessage := fmt.Sprintf("duckBot initiated!\n\n %s\n Epoch: %d\n Epoch Blocks: %d\n\n Lifetime Blocks: %d\n\n Quack Will Robinson, QUACK!",
+		i.poolName, i.epoch, i.epochBlocks, i.totalBlocks)
 
 	_, err = i.bot.Send(&telebot.Chat{ID: channelID}, initMessage)
 	if err != nil {
@@ -335,6 +335,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 
 	// If the block event is from the pool, process it
 	if blockEvent.Payload.IssuerVkey == i.poolId {
+		epochBlocks = epochBlocks + 1
 		blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
 		sizePercentage := (blockSizeKB / fullBlockSize) * 100
 
@@ -366,7 +367,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 				"Pooltool: https://pooltool.io/realtime/%d\n\n"+
 				"Cexplorer: "+cexplorerLink+"%s",
 			i.poolName, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
-			timeDiffString, i.epochBlocks, i.totalBlocks,
+			timeDiffString, epochBlocks, i.totalBlocks,
 			blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
 
 		// Send the message to the appropriate channel
