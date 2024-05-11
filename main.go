@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-//	"io"
+	//	"io"
 	"log"
 	"net/http"
 	"os"
@@ -36,7 +36,7 @@ const (
 	SecondsInDay        = 24 * 60 * 60
 	ShelleyEpochStart   = "2020-07-29T21:44:51Z"
 	StartingEpoch       = 208
-  )
+)
 
 // Singleton instance of the Indexer
 var globalIndexer = &Indexer{}
@@ -71,14 +71,6 @@ type Indexer struct {
 	wg              sync.WaitGroup
 }
 
-// TwitterCredentials represents the Twitter API credentials
-type TwitterCredentials struct {
-	ConsumerKey       string `json:"consumer_key"`
-	ConsumerSecret    string `json:"consumer_secret"`
-	AccessToken       string `json:"access_token"`
-	AccessTokenSecret string `json:"access_token_secret"`
-}
-
 type BlockEvent struct {
 	Type      string                 `json:"type"`
 	Timestamp string                 `json:"timestamp"`
@@ -96,8 +88,8 @@ func getCurrentEpoch() int {
 	// Parse the Shelley epoch start time
 	shelleyStartTime, err := time.Parse(time.RFC3339, ShelleyEpochStart)
 	if err != nil {
-	  fmt.Println("Error parsing Shelley start time:", err)
-	  return -1
+		fmt.Println("Error parsing Shelley start time:", err)
+		return -1
 	}
 	// Calculate the elapsed time since Shelley start in seconds
 	elapsedSeconds := time.Since(shelleyStartTime).Seconds()
@@ -105,10 +97,9 @@ func getCurrentEpoch() int {
 	epochsElapsed := int(elapsedSeconds / (EpochDurationInDays * SecondsInDay))
 	// Calculate the current epoch number
 	currentEpoch := StartingEpoch + epochsElapsed
-  
+
 	return currentEpoch
-  }
-  
+}
 
 // IncrementBlockCount increases the block count by one
 func (p *Blocks) IncrementBlockCount() {
@@ -236,6 +227,7 @@ func (i *Indexer) Start() error {
 
 	i.epoch = getCurrentEpoch()
 	fmt.Println("Epoch: ", i.epoch)
+
 	// Convert the poolId to Bech32
 	bech32PoolId, err := convertToBech32(i.poolId)
 	if err != nil {
@@ -257,18 +249,18 @@ func (i *Indexer) Start() error {
 	} else {
 		log.Fatalf("failed to get pool lifetime blocks: %s", err)
 	}
-//	// Get pool ticker
-//	if poolInfo.Data.MetaJSON.Ticker != nil {
-//		i.ticker = *poolInfo.Data.MetaJSON.Ticker
-//	} else {
-//		i.ticker = ""
-//	}
+	//	// Get pool ticker
+	//	if poolInfo.Data.MetaJSON.Ticker != nil {
+	//		i.ticker = *poolInfo.Data.MetaJSON.Ticker
+	//	} else {
+	//		i.ticker = ""
+	//	}
 	// Get pool name
-//	if poolInfo.Data.MetaJSON.Name != nil {
-//		i.poolName = *poolInfo.Data.MetaJSON.Name
-//	} else {
-//		i.poolName = ""
-//	}
+	//	if poolInfo.Data.MetaJSON.Name != nil {
+	//		i.poolName = *poolInfo.Data.MetaJSON.Name
+	//	} else {
+	//		i.poolName = ""
+	//	}
 	channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
 	if err != nil {
 		log.Fatalf("failed to parse telegram channel ID: %s", err)
@@ -336,97 +328,96 @@ func (i *Indexer) Start() error {
 
 // Handle block events received from the adder pipeline
 func (i *Indexer) handleEvent(event event.Event) error {
-    // Marshal the event to JSON
-    data, err := json.Marshal(event)
-    if err != nil {
-        return fmt.Errorf("error marshalling event: %v", err)
-    }
+	// Marshal the event to JSON
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("error marshalling event: %v", err)
+	}
 
-    // Unmarshal the event to get the block event details
-    var blockEvent BlockEvent
-    err = json.Unmarshal(data, &blockEvent)
-    if err != nil {
-        return fmt.Errorf("error unmarshalling block event: %v", err)
-    }
+	// Unmarshal the event to get the block event details
+	var blockEvent BlockEvent
+	err = json.Unmarshal(data, &blockEvent)
+	if err != nil {
+		return fmt.Errorf("error unmarshalling block event: %v", err)
+	}
 
-    // Convert the block event timestamp to local time
-    parsedTime, err := time.Parse(time.RFC3339, blockEvent.Timestamp)
-    if err == nil {
-        localTime := parsedTime.In(time.Local)
-        blockEvent.Timestamp = localTime.Format("January 2, 2006 15:04:05 MST")
-        fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
-    }
+	// Convert the block event timestamp to local time
+	parsedTime, err := time.Parse(time.RFC3339, blockEvent.Timestamp)
+	if err == nil {
+		localTime := parsedTime.In(time.Local)
+		blockEvent.Timestamp = localTime.Format("January 2, 2006 15:04:05 MST")
+		fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
+	}
 
-    // Convert issuer Vkey to Bech32
-    bech32IssuerVkey, err := convertToBech32(blockEvent.Payload.IssuerVkey)
-    if err != nil {
-        log.Printf("failed to convert issuer vkey to Bech32: %s", err)
-    } else {
-        fmt.Printf("IssuerVkey: %s\n", bech32IssuerVkey)
-    }
+	// Convert issuer Vkey to Bech32
+	bech32IssuerVkey, err := convertToBech32(blockEvent.Payload.IssuerVkey)
+	if err != nil {
+		log.Printf("failed to convert issuer vkey to Bech32: %s", err)
+	} else {
+		fmt.Printf("IssuerVkey: %s\n", bech32IssuerVkey)
+	}
 
-    // Customize links based on the network magic number
-    var cexplorerLink string
-    switch i.networkMagic {
-    case 1:
-        cexplorerLink = "https://preprod.cexplorer.io/block/"
-    case 2:
-        cexplorerLink = "https://preview.cexplorer.io/block/"
-    default:
-        cexplorerLink = "https://cexplorer.io/block/"
-    }
+	// Customize links based on the network magic number
+	var cexplorerLink string
+	switch i.networkMagic {
+	case 1:
+		cexplorerLink = "https://preprod.cexplorer.io/block/"
+	case 2:
+		cexplorerLink = "https://preview.cexplorer.io/block/"
+	default:
+		cexplorerLink = "https://cexplorer.io/block/"
+	}
 
-    // If the block event is from the pool, process it
-    if blockEvent.Payload.IssuerVkey == i.poolId {
-//        tipInfo, err := i.koios.GetTip(context.Background(), nil)
-//        if err != nil {
-//            log.Fatalf("failed to get epoch info: %s", err)
-//        }
+	// If the block event is from the pool, process it
+	if blockEvent.Payload.IssuerVkey == i.poolId {
+		//        tipInfo, err := i.koios.GetTip(context.Background(), nil)
+		//        if err != nil {
+		//            log.Fatalf("failed to get epoch info: %s", err)
+		//        }
 
-        // Current epoch
- //       epoch := i.epoch
+		// Current epoch
+		//       epoch := i.epoch
 
-        blockCount.CheckEpoch(i.epoch)
-        blockCount.IncrementBlockCount()
+		blockCount.CheckEpoch(i.epoch)
+		blockCount.IncrementBlockCount()
 
-        blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
-        sizePercentage := (blockSizeKB / fullBlockSize) * 100
+		blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
+		sizePercentage := (blockSizeKB / fullBlockSize) * 100
 
-        msg := fmt.Sprintf(
-            "Quack!(attention) 🦆\nduckBot notification!\n\n"+"%s\n"+"💥 New Block!\n\n"+
-                "Tx Count: %d\n"+
-                "Block Size: %.2f KB\n"+
-                "%.2f%% Full\n\n"+
-                "Epoch %d\n"+
-                "Blocks: %d\n"+
-                "Lifetime Blocks: %d\n\n"+
-                "Pooltool: https://pooltool.io/realtime/%d\n\n"+
-                "Cexplorer: "+cexplorerLink+"%s",
-            i.poolName, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
-            i.epoch, blockCount.BlockCount, i.totalBlocks,
-            blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
+		msg := fmt.Sprintf(
+			"Quack!(attention) 🦆\nduckBot notification!\n\n"+"%s\n"+"💥 New Block!\n\n"+
+				"Tx Count: %d\n"+
+				"Block Size: %.2f KB\n"+
+				"%.2f%% Full\n\n"+
+				"Epoch %d\n"+
+				"Blocks: %d\n"+
+				"Lifetime Blocks: %d\n\n"+
+				"Pooltool: https://pooltool.io/realtime/%d\n\n"+
+				"Cexplorer: "+cexplorerLink+"%s",
+			i.poolName, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
+			i.epoch, blockCount.BlockCount, i.totalBlocks,
+			blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
 
-        // Send the message to the appropriate channel
-        channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
-        if err != nil {
-            log.Fatalf("failed to parse telegram channel ID: %s", err)
-        }
-        photo := &telebot.Photo{File: telebot.FromURL(getDuckImage()), Caption: msg}
-        _, err = i.bot.Send(&telebot.Chat{ID: channelID}, photo)
-        if err != nil {
-            log.Printf("failed to send Telegram message: %s", err)
-        }
-    }
+		// Send the message to the appropriate channel
+		channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
+		if err != nil {
+			log.Fatalf("failed to parse telegram channel ID: %s", err)
+		}
+		photo := &telebot.Photo{File: telebot.FromURL(getDuckImage()), Caption: msg}
+		_, err = i.bot.Send(&telebot.Chat{ID: channelID}, photo)
+		if err != nil {
+			log.Printf("failed to send Telegram message: %s", err)
+		}
+	}
 
-    // Print the received event information
-    fmt.Printf("Received Event: %+v\n", blockEvent)
+	// Print the received event information
+	fmt.Printf("Received Event: %+v\n", blockEvent)
 
-    // Send the block event to the WebSocket clients
-    broadcast <- blockEvent
+	// Send the block event to the WebSocket clients
+	broadcast <- blockEvent
 
-    return nil
+	return nil
 }
-
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
 	// Upgrade initial GET request to a websocket
@@ -436,10 +427,8 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 	}
 	// Make sure we close the connection when the function returns
 	defer ws.Close()
-
 	// Register our new client
 	clients[ws] = true
-
 	for {
 		var msg interface{}
 		// Read in a new message as JSON and map it to a Message object
@@ -449,12 +438,12 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 			delete(clients, ws)
 			break
 		}
-
 		// Send the newly received message to the broadcast channel
 		broadcast <- msg
 	}
 }
 
+// Handle broadcasting the messages to clients
 func handleMessages() {
 	for {
 		// Grab the next message from the broadcast channel
@@ -471,43 +460,38 @@ func handleMessages() {
 	}
 }
 
-// Function to make a request to random duck image API
+// Get random duck
 func getDuckImage() string {
 	resp, err := http.Get("https://random-d.uk/api/v2/random")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer resp.Body.Close()
-
 	var result map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
-
 	imageURL := result["url"].(string)
 	return imageURL
 }
 
+// Convert to bech32 poolID
 func convertToBech32(hash string) (string, error) {
 	bytes, err := hex.DecodeString(hash)
 	if err != nil {
 		return "", err
 	}
-
 	fiveBitWords, err := bech32.ConvertBits(bytes, 8, 5, true)
 	if err != nil {
 		return "", err
 	}
-
 	bech32Str, err := bech32.Encode("pool", fiveBitWords)
 	if err != nil {
 		return "", err
 	}
-
 	return bech32Str, nil
 }
 
 // Main function to start the adder pipeline
 func main() {
-
 	blockCount = LoadBlockCount()
 
 	// Start the adder pipeline
