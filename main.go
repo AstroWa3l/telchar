@@ -6,6 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"sync"
+	"time"
+
 	"github.com/blinklabs-io/adder/event"
 	filter_event "github.com/blinklabs-io/adder/filter/event"
 	"github.com/blinklabs-io/adder/input/chainsync"
@@ -17,17 +25,15 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/spf13/viper"
 	telebot "gopkg.in/tucnak/telebot.v2"
-	"io"
-	"log"
-	"net/http"
-	"os"
-	"strconv"
-	"sync"
-	"time"
 )
 
 // Define fullBlockSize as a constant
 const fullBlockSize = 87.97
+const persistenceFile = "block_count.json"
+
+// Singleton instance of the Indexer
+var globalIndexer = &Indexer{}
+var blockCount = &Blocks{}
 
 // Channel to broadcast block events to connected clients
 var clients = make(map[*websocket.Conn]bool) // connected clients
@@ -37,6 +43,34 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
+}
+
+// Indexer struct to manage the adder pipeline and block events
+type Indexer struct {
+	pipeline        *pipeline.Pipeline
+	blockEvent      BlockEvent
+	bot             *telebot.Bot
+	poolId          string
+	telegramChannel string
+	telegramToken   string
+	image           string
+	ticker          string
+	koios           *koios.Client
+	bech32PoolId    string
+	nodeAddresses   []string
+	totalBlocks     uint64
+	poolName        string
+	epoch           int
+	networkMagic    int
+	wg              sync.WaitGroup
+}
+
+// TwitterCredentials represents the Twitter API credentials
+type TwitterCredentials struct {
+	ConsumerKey       string `json:"consumer_key"`
+	ConsumerSecret    string `json:"consumer_secret"`
+	AccessToken       string `json:"access_token"`
+	AccessTokenSecret string `json:"access_token_secret"`
 }
 
 type BlockEvent struct {
@@ -70,8 +104,6 @@ func (p *Blocks) CheckEpoch(epoch int) {
 		SaveBlockCount(*p)
 	}
 }
-
-const persistenceFile = "block_count.json"
 
 // SaveBlockCount persists the current block count and epoch to a file
 func SaveBlockCount(blocks Blocks) {
@@ -108,38 +140,6 @@ func LoadBlockCount() *Blocks {
 	return &blocks
 }
 
-// Indexer struct to manage the adder pipeline and block events
-type Indexer struct {
-	pipeline        *pipeline.Pipeline
-	blockEvent      BlockEvent
-	bot             *telebot.Bot
-	poolId          string
-	telegramChannel string
-	telegramToken   string
-	image           string
-	ticker          string
-	koios           *koios.Client
-	bech32PoolId    string
-	nodeAddresses   []string
-	totalBlocks     uint64
-	poolName        string
-	epoch           int
-	networkMagic    int
-	wg              sync.WaitGroup
-}
-
-// TwitterCredentials represents the Twitter API credentials
-type TwitterCredentials struct {
-	ConsumerKey       string `json:"consumer_key"`
-	ConsumerSecret    string `json:"consumer_secret"`
-	AccessToken       string `json:"access_token"`
-	AccessTokenSecret string `json:"access_token_secret"`
-}
-
-// Singleton instance of the Indexer
-var globalIndexer = &Indexer{}
-var blockCount = &Blocks{}
-
 // Start the adder pipeline and handle block events
 func (i *Indexer) Start() error {
 	// Increment the WaitGroup counter
@@ -151,18 +151,22 @@ func (i *Indexer) Start() error {
 			log.Println("Recovered in handleEvent", r)
 		}
 	}()
+
 	viper.SetConfigName("config") // name of config file (without extension)
 	viper.AddConfigPath(".")      // look for config in the working directory
-	e := viper.ReadInConfig()     // Find and read the config file
-	if e != nil {                 // Handle errors reading the config file
+
+	e := viper.ReadInConfig() // Find and read the config file
+	if e != nil {             // Handle errors reading the config file
 		log.Fatalf("Error while reading config file %s", e)
 	}
+
 	// Set the configuration values
 	i.poolId = viper.GetString("poolId")
 	i.telegramChannel = viper.GetString("telegram.channel")
 	i.telegramToken = viper.GetString("telegram.token")
 	i.image = viper.GetString("image")
 	i.networkMagic = viper.GetInt("networkMagic")
+
 	// Store the node addresses hosts into the array nodeAddresses in the Indexer
 	i.nodeAddresses = viper.GetStringSlice("nodeAddress.host1")
 	i.nodeAddresses = append(i.nodeAddresses, viper.GetStringSlice("nodeAddress.host2")...)
@@ -176,6 +180,7 @@ func (i *Indexer) Start() error {
 	if err != nil {
 		log.Fatalf("failed to start bot: %s", err)
 	}
+
 	/// Initialize the kois client based on networkMagic number
 	if i.networkMagic == 1 {
 		i.koios, e = koios.New(
@@ -202,6 +207,7 @@ func (i *Indexer) Start() error {
 			log.Fatal(e)
 		}
 	}
+
 	// Get the current epoch
 	epochInfo, err := i.koios.GetTip(context.Background(), nil)
 	if err != nil {
@@ -215,6 +221,7 @@ func (i *Indexer) Start() error {
 		log.Printf("failed to convert pool id to Bech32: %s", err)
 		fmt.Println("PoolId: ", bech32PoolId)
 	}
+
 	// Set the bech32PoolId field in the Indexer
 	i.bech32PoolId = bech32PoolId
 	// Get pool info
@@ -222,6 +229,7 @@ func (i *Indexer) Start() error {
 	if err != nil {
 		log.Fatalf("failed to get pool lifetime blocks: %s", err)
 	}
+
 	if poolInfo.Data != nil {
 		i.totalBlocks = poolInfo.Data.BlockCount
 		fmt.Println("Total Blocks: ", i.totalBlocks)
@@ -246,6 +254,7 @@ func (i *Indexer) Start() error {
 	}
 	initMessage := fmt.Sprintf("duckBot initiated!\n\n %s\n Epoch: %d\n Lifetime Blocks: %d\n\n Quack Will Robinson, QUACK!",
 		i.poolName, epochInfo.Data.EpochNo, i.totalBlocks)
+
 	_, err = i.bot.Send(&telebot.Chat{ID: channelID}, initMessage)
 	if err != nil {
 		log.Printf("failed to send Telegram message: %s", err)
@@ -261,27 +270,33 @@ func (i *Indexer) Start() error {
 			chainsync.WithIntersectTip(true),
 			chainsync.WithAutoReconnect(true),
 		}
+
 		i.pipeline = pipeline.New()
 		// Configure ChainSync input
 		input_chainsync := chainsync.New(inputOpts...)
 		i.pipeline.AddInput(input_chainsync)
+
 		// Configure filter to handle events
 		filterEvent := filter_event.New(filter_event.WithTypes([]string{"chainsync.block", "chainsync.rollback"}))
 		i.pipeline.AddFilter(filterEvent)
+
 		// Configure embedded output with callback function
 		output := output_embedded.New(output_embedded.WithCallbackFunc(i.handleEvent))
 		i.pipeline.AddOutput(output)
+
 		err := i.pipeline.Start()
 		if err != nil {
 			log.Printf("Failed to start pipeline: %s. Retrying...", err)
 			return err
 		}
+
 		return nil
 	}
 
 	// Initialize the backoff strategy
 	bo := backoff.NewExponentialBackOff()
 	bo.MaxElapsedTime = time.Minute // Max duration to keep retrying
+
 	hosts := i.nodeAddresses
 	for _, host := range hosts {
 		for i := 0; i < maxRetries; i++ {
@@ -292,12 +307,15 @@ func (i *Indexer) Start() error {
 			time.Sleep(time.Duration(i) * time.Second)
 		}
 	}
+
 	log.Fatalf("Failed to start pipeline after several attempts")
 	return errors.New("Failed to start pipeline after several attempts")
+
 }
 
 // Handle block events received from the adder pipeline
 func (i *Indexer) handleEvent(event event.Event) error {
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Println("Recovered in handleEvent", r)
@@ -309,19 +327,23 @@ func (i *Indexer) handleEvent(event event.Event) error {
 	if err != nil {
 		return fmt.Errorf("error unmarshalling event: %v", err)
 	}
+
 	if len(data) == 0 {
 		return fmt.Errorf("no data to unmarshal")
 	}
+
 	// Unmarshal the event to get the event type
 	var getEvent map[string]interface{}
 	errr := json.Unmarshal(data, &getEvent)
 	if errr != nil {
 		return err
 	}
+
 	eventType, ok := getEvent["type"].(string)
 	if !ok {
 		return fmt.Errorf("failed to get event type")
 	}
+
 	channel, err := i.bot.ChatByID(i.telegramChannel)
 	if err != nil {
 		panic(err) // You should add better error handling than this!
@@ -329,23 +351,27 @@ func (i *Indexer) handleEvent(event event.Event) error {
 
 	switch eventType {
 	case "chainsync.block":
+
 		var blockEvent BlockEvent
 		err := json.Unmarshal(data, &blockEvent)
 		if err != nil {
 			return fmt.Errorf("error unmarshalling block event: %v", err)
 		}
+
 		bech32IssuerVkey, err := convertToBech32(blockEvent.Payload.IssuerVkey)
 		if err != nil {
 			log.Printf("failed to convert issuer vkey to Bech32: %s", err)
 		} else {
 			fmt.Printf("IssuerVkey: %s\n", bech32IssuerVkey)
 		}
+
 		parsedTime, err := time.Parse(time.RFC3339, blockEvent.Timestamp)
 		if err == nil {
 			localTime := parsedTime.In(time.Local)
 			blockEvent.Timestamp = localTime.Format("January 2, 2006 15:04:05 MST")
 			fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
 		}
+
 		// Customize links based on the network magic number
 		var cexplorerLink string
 		if i.networkMagic == 1 {
@@ -355,7 +381,9 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		} else {
 			cexplorerLink = "https://cexplorer.io/block/"
 		}
+
 		if blockEvent.Payload.IssuerVkey == i.poolId {
+
 			tipInfo, err := i.koios.GetTip(context.Background(), nil)
 			if err != nil {
 				log.Fatalf("failed to get epoch info: %s", err)
@@ -363,10 +391,22 @@ func (i *Indexer) handleEvent(event event.Event) error {
 
 			// Current epoch
 			epoch := int(tipInfo.Data.EpochNo)
+
 			blockCount.CheckEpoch(epoch)
+
 			blockCount.IncrementBlockCount()
+
+			// // Getting the current epoch's blocks made by a specific pool
+			// currentEpochBlocks, err := i.koios.GetPoolBlocks(context.Background(), koios.PoolID(i.bech32PoolId), &epoch, nil)
+			// if err != nil {
+			// 	log.Fatal(err)
+			// }
+			// We need to count the length of the json array in order to get the number of blocks
+			// currBlocks := len(currentEpochBlocks.Data)
+
 			blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
 			sizePercentage := (blockSizeKB / fullBlockSize) * 100
+
 			msg := fmt.Sprintf(
 				"Quack!(attention) 🦆\nduckBot notification!\n\n"+"%s\n"+"💥 New Block!\n\n"+
 					"Tx Count: %d\n"+
@@ -387,9 +427,12 @@ func (i *Indexer) handleEvent(event event.Event) error {
 				log.Printf("failed to send Telegram message: %s", err)
 			}
 		}
+
 		// Update the currentEvent field in the Indexer
 		i.blockEvent = blockEvent
+
 		fmt.Printf("Received Event: %+v\n", blockEvent)
+
 		// Send the block event to the WebSocket clients
 		broadcast <- blockEvent
 	}
@@ -417,6 +460,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 			}
 		}
 	}()
+
 	return nil
 }
 
@@ -428,8 +472,10 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 	}
 	// Make sure we close the connection when the function returns
 	defer ws.Close()
+
 	// Register our new client
 	clients[ws] = true
+
 	for {
 		var msg interface{}
 		// Read in a new message as JSON and map it to a Message object
@@ -439,6 +485,8 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 			delete(clients, ws)
 			break
 		}
+
+		// Send the newly received message to the broadcast channel
 		broadcast <- msg
 	}
 }
@@ -466,8 +514,10 @@ func getDuckImage() string {
 		log.Fatal(err)
 	}
 	defer resp.Body.Close()
+
 	var result map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
+
 	imageURL := result["url"].(string)
 	return imageURL
 }
@@ -477,30 +527,39 @@ func convertToBech32(hash string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	fiveBitWords, err := bech32.ConvertBits(bytes, 8, 5, true)
 	if err != nil {
 		return "", err
 	}
+
 	bech32Str, err := bech32.Encode("pool", fiveBitWords)
 	if err != nil {
 		return "", err
 	}
+
 	return bech32Str, nil
 }
 
 // Main function to start the adder pipeline
 func main() {
+
 	blockCount = LoadBlockCount()
+
 	// Start the adder pipeline
 	if err := globalIndexer.Start(); err != nil {
 		log.Fatalf("failed to start adder: %s", err)
 	}
+
 	// Configure websocket route
 	http.HandleFunc("/ws", handleConnections)
+
 	// Start listening for incoming chat messages
 	go handleMessages()
+
 	// Wait for all goroutines to finish before exiting
 	globalIndexer.wg.Wait()
+
 	// Start the server on localhost port 8080 and log any errors
 	log.Println("http server started on :8080")
 	err := http.ListenAndServe("localhost:8080", nil)
