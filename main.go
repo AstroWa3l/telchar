@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	//	"strings"
 
 	"github.com/blinklabs-io/adder/event"
 	filter_event "github.com/blinklabs-io/adder/filter/event"
@@ -26,18 +27,18 @@ import (
 )
 
 const (
-	fullBlockSize = 87.97
+	fullBlockSize       = 87.97
 	EpochDurationInDays = 5
-//	ShelleyStartSlot    = 4492800
-	SecondsInDay        = 24 * 60 * 60
-	ShelleyEpochStart   = "2020-07-29T21:44:51Z"
-	StartingEpoch       = 208
+	//	ShelleyStartSlot    = 4492800
+	SecondsInDay      = 24 * 60 * 60
+	ShelleyEpochStart = "2020-07-29T21:44:51Z"
+	StartingEpoch     = 208
 )
 
 // Define a variable to store the timestamp of the previous block event
 var prevBlockTimestamp time.Time
 var timeDiffString string
-//var epochBlocks uint
+
 // Channel to broadcast block events to connected clients
 var clients = make(map[*websocket.Conn]bool) // connected clients
 var broadcast = make(chan interface{})       // broadcast channel
@@ -194,7 +195,7 @@ func (i *Indexer) Start() error {
 	} else {
 		log.Fatalf("failed to get pool epoch blocks: %s", err)
 	}
-	
+
 	if lifetimeBlocks.Data != nil {
 		i.totalBlocks = lifetimeBlocks.Data.BlockCount
 		fmt.Println("Total Blocks: ", i.totalBlocks)
@@ -268,57 +269,50 @@ func (i *Indexer) Start() error {
 
 // Handle block events received from the adder pipeline
 func (i *Indexer) handleEvent(event event.Event) error {
-    // Marshal the event to JSON
-    data, err := json.Marshal(event)
-    if err != nil {
-        return fmt.Errorf("error marshalling event: %v", err)
-    }
+	// Marshal the event to JSON
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("error marshalling event: %v", err)
+	}
 
-    // Unmarshal the event to get the block event details
-    var blockEvent BlockEvent
-    err = json.Unmarshal(data, &blockEvent)
-    if err != nil {
-        return fmt.Errorf("error unmarshalling block event: %v", err)
-    }
+	// Unmarshal the event to get the block event details
+	var blockEvent BlockEvent
+	err = json.Unmarshal(data, &blockEvent)
+	if err != nil {
+		return fmt.Errorf("error unmarshalling block event: %v", err)
+	}
 
-    // Convert the block event timestamp to time.Time
-    blockEventTime, err := time.Parse(time.RFC3339, blockEvent.Timestamp)
-    if err != nil {
-        return fmt.Errorf("error parsing block event timestamp: %v", err)
-    }
+	// Convert the block event timestamp to time.Time
+	blockEventTime, err := time.Parse(time.RFC3339, blockEvent.Timestamp)
+	if err != nil {
+		return fmt.Errorf("error parsing block event timestamp: %v", err)
+	}
 
-    // Calculate the time difference between the current block event and the previous one
-    if !prevBlockTimestamp.IsZero() {
-        timeDiff := blockEventTime.Sub(prevBlockTimestamp)
+	// Calculate the time difference between the current block event and the previous one
+	timeDiff := blockEventTime.Sub(prevBlockTimestamp)
+	if timeDiff.Seconds() < 60 {
+		timeDiffString = fmt.Sprintf("%.0f seconds", timeDiff.Seconds())
+	} else {
+		minutes := int(timeDiff.Minutes())
+		seconds := int(timeDiff.Seconds()) - (minutes * 60)
+		timeDiffString = fmt.Sprintf("%d minute %02d seconds", minutes, seconds)
+	}
 
-        // Convert time difference to seconds or minute:seconds format
-        var timeDiffString string
-        if timeDiff.Seconds() < 60 {
-            timeDiffString = fmt.Sprintf("%.0f seconds", timeDiff.Seconds())
-        } else {
-            minutes := int(timeDiff.Minutes())
-            seconds := int(timeDiff.Seconds()) - (minutes * 60)
-            timeDiffString = fmt.Sprintf("%d minute %02d seconds", minutes, seconds)
-        }
+	// Update the previous block event timestamp with the current one
+	prevBlockTimestamp = blockEventTime
 
-        fmt.Printf("Time between block events: %s\n", timeDiffString)
-    }
+	// Convert the block event timestamp to local time
+	localTime := blockEventTime.In(time.Local)
+	blockEvent.Timestamp = localTime.Format("January 2, 2006 15:04:05 MST")
+	fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
 
-    // Update the previous block event timestamp with the current one
-    prevBlockTimestamp = blockEventTime
-
-    // Convert the block event timestamp to local time
-    localTime := blockEventTime.In(time.Local)
-    blockEvent.Timestamp = localTime.Format("January 2, 2006 15:04:05 MST")
-    fmt.Printf("Local Time: %s\n", blockEvent.Timestamp)
-
-    // Convert issuer Vkey to Bech32
-    bech32PoolID, err := convertToBech32(blockEvent.Payload.IssuerVkey)
-    if err != nil {
-        log.Printf("failed to convert issuer vkey to Bech32: %s", err)
-    } else {
-        fmt.Printf("Bech32 poolID: %s\n", bech32PoolID)
-    }
+	// Convert issuer Vkey to Bech32
+	bech32PoolID, err := convertToBech32(blockEvent.Payload.IssuerVkey)
+	if err != nil {
+		log.Printf("failed to convert issuer vkey to Bech32: %s", err)
+	} else {
+		fmt.Printf("Bech32 poolID: %s\n", bech32PoolID)
+	}
 
 	// Customize links based on the network magic number
 	var cexplorerLink string
