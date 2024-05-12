@@ -341,7 +341,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 			"Quack!(attention) 🦆\nduckBot notification!\n\n"+"%s\n"+"💥 New Block!\n\n"+
 				"Tx Count: %d\n"+
 				"Block Size: %.2f KB\n"+
-				"%.2f%% Full\n\n"+
+				"%.2f%% Full\n"+
 				"Time Between: %s\n\n"+
 				"Epoch Blocks: %d\n"+
 				"Lifetime Blocks: %d\n\n"+
