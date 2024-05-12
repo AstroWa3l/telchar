@@ -9,7 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-//	"strings"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +76,22 @@ type BlockEvent struct {
 	Timestamp string                 `json:"timestamp"`
 	Context   chainsync.BlockContext `json:"context"`
 	Payload   chainsync.BlockEvent   `json:"payload"`
+}
+
+// Define structs to represent the JSON data
+type PooltoolData struct {
+	BVRFWinner       bool           `json:"bvrfwinner"`
+	VRFWinner        bool           `json:"vrfwinner"`
+	LastParent       string         `json:"lastparent"`
+	LeaderPoolName   string         `json:"leaderPoolName"`
+	LeaderPoolTicker string         `json:"leaderPoolTicker"`
+	Epoch            int            `json:"epoch"`
+	IntBlockVRF      int64          `json:"intblockvrf"`
+	IntLeaderVRF     int64          `json:"intleadervrf"`
+	NewData          bool           `json:"newData"`
+	Reports          int            `json:"reports"`
+	Slot             int            `json:"slot"`
+	RawTips          map[string]int `json:"rawtips"`
 }
 
 // Function to calculate the current epoch number
@@ -298,6 +314,9 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		timeDiffString = fmt.Sprintf("%d minute %02d seconds", minutes, seconds)
 	}
 
+	// Print the time difference to the terminal
+	fmt.Println("Time Difference:", timeDiffString)
+
 	// Update the previous block event timestamp with the current one
 	prevBlockTimestamp = blockEventTime
 
@@ -328,13 +347,43 @@ func (i *Indexer) handleEvent(event event.Event) error {
 	// If the block event is from the pool, process it
 	if blockEvent.Payload.IssuerVkey == i.poolId {
 		// Extract the first part of the block number
-//		blockNumberStr := strconv.FormatUint(blockEvent.Context.BlockNumber, 10)
-//		blockNumberParts := strings.Split(blockNumberStr, "")
-//		firstPartBlockNumber := strings.Join(blockNumberParts[:len(blockNumberParts)/2], "")
+		blockNumberStr := strconv.FormatUint(blockEvent.Context.BlockNumber, 10)
+		blockNumberParts := strings.Split(blockNumberStr, "")
+		firstPartBlockNumber := strings.Join(blockNumberParts[:len(blockNumberParts)/2], "")
 
 		// Construct Pooltool URL based on the first part of the block number and block hash
-//		pooltoolURL := fmt.Sprintf("https://s3-us-west-2.amazonaws.com/data.pooltool.io/blockdata/%s/C_%s.json",
-//			firstPartBlockNumber, blockEvent.Payload.BlockHash)
+		pooltoolURL := fmt.Sprintf("https://s3-us-west-2.amazonaws.com/data.pooltool.io/blockdata/%s/C_%s.json",
+			firstPartBlockNumber, blockEvent.Payload.BlockHash)
+		// Make GET request to Pooltool API
+		response, err := http.Get(pooltoolURL)
+		if err != nil {
+			fmt.Println("Error making GET request:", err)
+			return fmt.Errorf("error making GET request: %v", err)
+		}
+		defer response.Body.Close()
+
+		// Decode JSON response
+		var pooltoolResponse PooltoolData
+		err = json.NewDecoder(response.Body).Decode(&pooltoolResponse)
+		if err != nil {
+			fmt.Println("Error decoding JSON response:", err)
+			return fmt.Errorf("error decoding JSON response: %v", err)
+		}
+
+		// Handle the decoded data as needed
+		fmt.Println("BVRFWinner:", pooltoolResponse.BVRFWinner)
+		fmt.Println("VRFWinner:", pooltoolResponse.VRFWinner)
+		fmt.Println("LastParent:", pooltoolResponse.LastParent)
+		fmt.Println("LeaderPoolName:", pooltoolResponse.LeaderPoolName)
+		fmt.Println("LeaderPoolTicker:", pooltoolResponse.LeaderPoolTicker)
+		fmt.Println("Epoch:", pooltoolResponse.Epoch)
+		fmt.Println("IntBlockVRF:", pooltoolResponse.IntBlockVRF)
+		fmt.Println("IntLeaderVRF:", pooltoolResponse.IntLeaderVRF)
+		fmt.Println("NewData:", pooltoolResponse.NewData)
+		fmt.Println("Reports:", pooltoolResponse.Reports)
+		fmt.Println("Slot:", pooltoolResponse.Slot)
+		fmt.Println("RawTips:", pooltoolResponse.RawTips)
+
 		i.epochBlocks = int(i.epochBlocks + 1)
 		blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
 		sizePercentage := (blockSizeKB / fullBlockSize) * 100
