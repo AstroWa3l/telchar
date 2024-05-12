@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	//	"strings"
 
 	"github.com/blinklabs-io/adder/event"
 	filter_event "github.com/blinklabs-io/adder/filter/event"
@@ -297,6 +296,9 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		seconds := int(timeDiff.Seconds()) - (minutes * 60)
 		timeDiffString = fmt.Sprintf("%d minute %02d seconds", minutes, seconds)
 	}
+
+	// Print the time difference to the terminal
+	fmt.Println("Time Difference:", timeDiffString)
 
 	// Update the previous block event timestamp with the current one
 	prevBlockTimestamp = blockEventTime
