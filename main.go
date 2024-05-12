@@ -9,9 +9,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+//	"strings"
 	"sync"
 	"time"
-	//	"strings"
 
 	"github.com/blinklabs-io/adder/event"
 	filter_event "github.com/blinklabs-io/adder/filter/event"
@@ -327,6 +327,14 @@ func (i *Indexer) handleEvent(event event.Event) error {
 
 	// If the block event is from the pool, process it
 	if blockEvent.Payload.IssuerVkey == i.poolId {
+		// Extract the first part of the block number
+//		blockNumberStr := strconv.FormatUint(blockEvent.Context.BlockNumber, 10)
+//		blockNumberParts := strings.Split(blockNumberStr, "")
+//		firstPartBlockNumber := strings.Join(blockNumberParts[:len(blockNumberParts)/2], "")
+
+		// Construct Pooltool URL based on the first part of the block number and block hash
+//		pooltoolURL := fmt.Sprintf("https://s3-us-west-2.amazonaws.com/data.pooltool.io/blockdata/%s/C_%s.json",
+//			firstPartBlockNumber, blockEvent.Payload.BlockHash)
 		i.epochBlocks = int(i.epochBlocks + 1)
 		blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
 		sizePercentage := (blockSizeKB / fullBlockSize) * 100
