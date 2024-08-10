@@ -28,10 +28,9 @@ import (
 const (
 	fullBlockSize       = 87.97
 	EpochDurationInDays = 5
-	//	ShelleyStartSlot    = 4492800
-	SecondsInDay      = 24 * 60 * 60
-	ShelleyEpochStart = "2020-07-29T21:44:51Z"
-	StartingEpoch     = 208
+	SecondsInDay        = 24 * 60 * 60
+	ShelleyEpochStart   = "2020-07-29T21:44:51Z"
+	StartingEpoch       = 208
 )
 
 // Define a variable to store the timestamp of the previous block event
@@ -222,6 +221,7 @@ func (i *Indexer) Start() error {
 			chainsync.WithNetworkMagic(uint32(i.networkMagic)),
 			chainsync.WithIntersectTip(true),
 			chainsync.WithAutoReconnect(true),
+	    	chainsync.WithIncludeCbor(false),
 		}
 
 		i.pipeline = pipeline.New()
@@ -266,7 +266,6 @@ func (i *Indexer) Start() error {
 
 }
 
-// Handle block events received from the adder pipeline
 func (i *Indexer) handleEvent(event event.Event) error {
 	// Marshal the event to JSON
 	data, err := json.Marshal(event)
@@ -327,18 +326,28 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		cexplorerLink = "https://cexplorer.io/block/"
 	}
 
+	// Check if the epoch has changed
+	currentEpoch := getCurrentEpoch()
+	if currentEpoch != i.epoch {
+		i.epoch = currentEpoch
+		i.epochBlocks = 0 // Reset epochBlocks at the start of a new epoch
+	}
+
 	// If the block event is from the pool, process it
 	if blockEvent.Payload.IssuerVkey == i.poolId {
-		i.epochBlocks = int(i.epochBlocks + 1)
+		i.epochBlocks++
+		i.totalBlocks++
+
 		blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
 		sizePercentage := (blockSizeKB / fullBlockSize) * 100
 
 		msg := fmt.Sprintf(
-			"Quack!(attention) 🦆\nduckBot notification!\n\n"+"%s\n"+"💥 New Block!\n\n"+
+			"Quack!(attention) 🦆\nduckBot notification!\n\n"+
+				"%s\n"+"💥 New Block!\n\n"+
 				"Tx Count: %d\n"+
 				"Block Size: %.2f KB\n"+
 				"%.2f%% Full\n"+
-				"Time Between: %s\n\n"+
+				"Block Interval: %s\n\n"+
 				"Epoch Blocks: %d\n"+
 				"Lifetime Blocks: %d\n\n"+
 				"Pooltool: https://pooltool.io/realtime/%d\n\n"+
@@ -457,8 +466,8 @@ func main() {
 	globalIndexer.wg.Wait()
 
 	// Start the server on localhost port 8080 and log any errors
-	log.Println("http server started on :8080")
-	err := http.ListenAndServe("localhost:8080", nil)
+	log.Println("http server started on :8081")
+	err := http.ListenAndServe("localhost:8081", nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
