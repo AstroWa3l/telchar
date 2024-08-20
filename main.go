@@ -25,13 +25,13 @@ import (
 	telebot "gopkg.in/tucnak/telebot.v2"
 )
 
+// Block Size calculation
 const (
 	fullBlockSize       = 87.97
 	EpochDurationInDays = 5
-	//	ShelleyStartSlot    = 4492800
-	SecondsInDay      = 24 * 60 * 60
-	ShelleyEpochStart = "2020-07-29T21:44:51Z"
-	StartingEpoch     = 208
+	SecondsInDay        = 24 * 60 * 60
+	ShelleyEpochStart   = "2020-07-29T21:44:51Z"
+	StartingEpoch       = 208
 )
 
 // Define a variable to store the timestamp of the previous block event
@@ -50,7 +50,14 @@ var upgrader = websocket.Upgrader{
 // Singleton instance of the Indexer
 var globalIndexer = &Indexer{}
 
-// Indexer struct to manage the Snek pipeline and block events
+type BlockEvent struct {
+	Type      string                 `json:"type"`
+	Timestamp string                 `json:"timestamp"`
+	Context   chainsync.BlockContext `json:"context"`
+	Payload   chainsync.BlockEvent   `json:"payload"`
+}
+
+// Indexer struct to manage the adder pipeline and block events
 type Indexer struct {
 	pipeline        *pipeline.Pipeline
 	bot             *telebot.Bot
@@ -68,13 +75,6 @@ type Indexer struct {
 	epoch           int
 	networkMagic    int
 	wg              sync.WaitGroup
-}
-
-type BlockEvent struct {
-	Type      string                 `json:"type"`
-	Timestamp string                 `json:"timestamp"`
-	Context   chainsync.BlockContext `json:"context"`
-	Payload   chainsync.BlockEvent   `json:"payload"`
 }
 
 // Function to calculate the current epoch number
@@ -95,16 +95,13 @@ func getCurrentEpoch() int {
 	return currentEpoch
 }
 
-// Start the Snek pipeline and handle block events
+// Start the adder pipeline and handle block events
 func (i *Indexer) Start() error {
-
 	// Increment the WaitGroup counter
 	i.wg.Add(1)
-
 	defer func() {
 		// Decrement the WaitGroup counter when the function exits
 		i.wg.Done()
-
 		if r := recover(); r != nil {
 			log.Println("Recovered in handleEvent", r)
 		}
@@ -116,7 +113,6 @@ func (i *Indexer) Start() error {
 	e := viper.ReadInConfig() // Find and read the config file
 	if e != nil {             // Handle errors reading the config file
 		log.Fatalf("Error while reading config file %s", e)
-
 	}
 
 	// Set the configuration values
@@ -137,7 +133,6 @@ func (i *Indexer) Start() error {
 		Token:  i.telegramToken,
 		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
 	})
-
 	if err != nil {
 		log.Fatalf("failed to start bot: %s", err)
 	}
@@ -169,7 +164,6 @@ func (i *Indexer) Start() error {
 		}
 	}
 
-	// Get the current epoch
 	i.epoch = getCurrentEpoch()
 	fmt.Println("Epoch: ", i.epoch)
 
@@ -211,7 +205,7 @@ func (i *Indexer) Start() error {
 	if err != nil {
 		log.Fatalf("failed to parse telegram channel ID: %s", err)
 	}
-	initMessage := fmt.Sprintf("duckBot initiated!\n\n %s\n Epoch: %d\n Epoch Blocks: %d\n\n Lifetime Blocks: %d\n\n Quack Will Robinson, QUACK!",
+	initMessage := fmt.Sprintf("Telchar initiated!\n\n %s\n Epoch: %d\n Epoch Blocks: %d\n\n Lifetime Blocks: %d\n",
 		i.poolName, i.epoch, i.epochBlocks, i.totalBlocks)
 
 	_, err = i.bot.Send(&telebot.Chat{ID: channelID}, initMessage)
@@ -219,7 +213,6 @@ func (i *Indexer) Start() error {
 		log.Printf("failed to send Telegram message: %s", err)
 	}
 	const maxRetries = 3
-
 	// Wrap the pipeline start in a function for the backoff operation
 	startPipelineFunc := func(host string) error {
 		// Use the host to connect to the Cardano node
@@ -229,16 +222,16 @@ func (i *Indexer) Start() error {
 			chainsync.WithNetworkMagic(uint32(i.networkMagic)),
 			chainsync.WithIntersectTip(true),
 			chainsync.WithAutoReconnect(true),
+			chainsync.WithIncludeCbor(false),
 		}
 
 		i.pipeline = pipeline.New()
-
 		// Configure ChainSync input
 		input_chainsync := chainsync.New(inputOpts...)
 		i.pipeline.AddInput(input_chainsync)
 
 		// Configure filter to handle events
-		filterEvent := filter_event.New(filter_event.WithTypes([]string{"chainsync.block", "chainsync.rollback"}))
+		filterEvent := filter_event.New(filter_event.WithTypes([]string{"chainsync.block"}))
 		i.pipeline.AddFilter(filterEvent)
 
 		// Configure embedded output with callback function
@@ -274,9 +267,8 @@ func (i *Indexer) Start() error {
 
 }
 
-// Handle block events received from the Snek pipeline
+// Handle block events
 func (i *Indexer) handleEvent(event event.Event) error {
-
 	// Marshal the event to JSON
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -288,11 +280,6 @@ func (i *Indexer) handleEvent(event event.Event) error {
 	err = json.Unmarshal(data, &blockEvent)
 	if err != nil {
 		return fmt.Errorf("error unmarshalling block event: %v", err)
-	}
-
-	channel, err := i.bot.ChatByID(i.telegramChannel)
-	if err != nil {
-		panic(err) // You should add better error handling than this!
 	}
 
 	// Convert the block event timestamp to time.Time
@@ -341,10 +328,18 @@ func (i *Indexer) handleEvent(event event.Event) error {
 		cexplorerLink = "https://cexplorer.io/block/"
 	}
 
-	if blockEvent.Payload.IssuerVkey == i.poolId {
+	// Check if the epoch has changed
+	currentEpoch := getCurrentEpoch()
+	if currentEpoch != i.epoch {
+		i.epoch = currentEpoch
+		i.epochBlocks = 0 // Reset epochBlocks at the start of a new epoch
+	}
 
-		// Current epoch
-		i.epoch = int(i.epochBlocks + 1)
+	// If the block event is from the pool, process it
+	if blockEvent.Payload.IssuerVkey == i.poolId {
+		i.epochBlocks++
+		i.totalBlocks++
+
 		blockSizeKB := float64(blockEvent.Payload.BlockBodySize) / 1024
 		sizePercentage := (blockSizeKB / fullBlockSize) * 100
 
@@ -361,20 +356,29 @@ func (i *Indexer) handleEvent(event event.Event) error {
 			i.poolName, blockEvent.Payload.TransactionCount, blockSizeKB, sizePercentage,
 			timeDiffString, i.epochBlocks, i.totalBlocks,
 			blockEvent.Context.BlockNumber, blockEvent.Payload.BlockHash)
+
+		// Send the message to the appropriate channel
+		channelID, err := strconv.ParseInt(i.telegramChannel, 10, 64)
+		if err != nil {
+			log.Fatalf("failed to parse telegram channel ID: %s", err)
+		}
+
 		photo := &telebot.Photo{File: telebot.FromURL(i.image), Caption: msg}
 
-		_, err = i.bot.Send(channel, photo)
+		_, err = i.bot.Send(&telebot.Chat{ID: channelID}, photo)
 		if err != nil {
 			log.Printf("failed to send Telegram message: %s", err)
 		}
 	}
 
+	// Print the received event information
 	fmt.Printf("Received Event: %+v\n", blockEvent)
 
 	// Send the block event to the WebSocket clients
 	broadcast <- blockEvent
 
 	return nil
+
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
@@ -385,10 +389,8 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 	}
 	// Make sure we close the connection when the function returns
 	defer ws.Close()
-
 	// Register our new client
 	clients[ws] = true
-
 	for {
 		var msg interface{}
 		// Read in a new message as JSON and map it to a Message object
@@ -398,12 +400,12 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 			delete(clients, ws)
 			break
 		}
-
 		// Send the newly received message to the broadcast channel
 		broadcast <- msg
 	}
 }
 
+// Handle broadcasting the messages to clients
 func handleMessages() {
 	for {
 		// Grab the next message from the broadcast channel
@@ -439,12 +441,12 @@ func convertToBech32(hash string) (string, error) {
 	return bech32Str, nil
 }
 
-// Main function to start the Snek pipeline
+// Main function to start the adder pipeline
 func main() {
 
-	// Start the Snek pipeline
+	// Start the adder pipeline
 	if err := globalIndexer.Start(); err != nil {
-		log.Fatalf("failed to start snek: %s", err)
+		log.Fatalf("failed to start adder: %s", err)
 	}
 
 	// Configure websocket route
@@ -457,8 +459,8 @@ func main() {
 	globalIndexer.wg.Wait()
 
 	// Start the server on localhost port 8080 and log any errors
-	log.Println("http server started on :8080")
-	err := http.ListenAndServe("localhost:8080", nil)
+	log.Println("http server started on :8081")
+	err := http.ListenAndServe("localhost:8081", nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
