@@ -181,8 +181,6 @@ func (i *Indexer) Start() error {
 		log.Fatalf("failed to get pool lifetime blocks: %s", err)
 	}
 
-	// Set the bech32PoolId field in the Indexer
-	i.bech32PoolId = bech32PoolId
 	// Get epoch blocks
 	epoch := koios.EpochNo(i.epoch)
 	epochBlocks, err := i.koios.GetPoolBlocks(context.Background(), koios.PoolID(i.bech32PoolId), &epoch, nil)
@@ -248,7 +246,7 @@ func (i *Indexer) Start() error {
 
 	// Initialize the backoff strategy
 	bo := backoff.NewExponentialBackOff()
-	bo.MaxElapsedTime = time.Minute // Max duration to keep retrying
+	bo.MaxElapsedTime = time.Minute
 
 	hosts := i.nodeAddresses
 	for _, host := range hosts {
@@ -330,7 +328,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 	currentEpoch := getCurrentEpoch()
 	if currentEpoch != i.epoch {
 		i.epoch = currentEpoch
-		i.epochBlocks = 0 // Reset epochBlocks at the start of a new epoch
+		i.epochBlocks = 0
 	}
 
 	// If the block event is from the pool, process it
@@ -347,7 +345,7 @@ func (i *Indexer) handleEvent(event event.Event) error {
 				"Tx Count: %d\n"+
 				"Block Size: %.2f KB\n"+
 				"%.2f%% Full\n"+
-				"Block Interval: %s\n\n"+
+				"Interval: %s\n\n"+
 				"Epoch Blocks: %d\n"+
 				"Lifetime Blocks: %d\n\n"+
 				"Pooltool: https://pooltool.io/realtime/%d\n\n"+
